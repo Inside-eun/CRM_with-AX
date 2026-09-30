@@ -1,0 +1,16 @@
+/* AX CRM Design System 진입점 (원본: AX CRM Design System/styles.css)
+ *
+ * 원본에서 뺀 import
+ * - tokens/fonts.css: 폰트는 app/layout.tsx에서 next/font(Inter, Roboto Mono)와 Pretendard 스타일시트로 로드합니다.
+ * - tokens/figma/*, components/figma/fig-assets.css: components/figma 원본 컴포넌트 전용이라 CRM 레이어에서 참조하지 않습니다.
+ *
+ * 레이어
+ * - 토큰과 base 스타일은 Tailwind preflight 뒤에 오도록 base 레이어에 넣습니다.
+ * - crm.css는 components 레이어에 넣어 Tailwind 유틸리티(utilities 레이어)로 덮어쓸 수 있게 합니다.
+ */
+@import "./tokens/colors.css" layer(base);
+@import "./tokens/typography.css" layer(base);
+@import "./tokens/spacing.css" layer(base);
+@import "./tokens/effects.css" layer(base);
+@import "./tokens/base.css" layer(base);
+@import "./crm/crm.css" layer(components);

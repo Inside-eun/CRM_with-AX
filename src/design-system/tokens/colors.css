@@ -1,0 +1,26 @@
+/* Palette values read from the Figma file (Untitled UI v2 — brand swapped to Blue in this copy).
+   Semantic CRM aliases at the bottom map the brief's roles (navy/blue primary, teal AI, orange warn, red danger, green done). */
+:root{
+--base-white:#FFFFFF;--base-black:#000000;
+--gray-25:#FCFCFD;--gray-50:#F9FAFB;--gray-100:#F2F4F7;--gray-200:#EAECF0;--gray-300:#D0D5DD;--gray-400:#98A2B3;--gray-500:#667085;--gray-600:#475467;--gray-700:#344054;--gray-800:#1D2939;--gray-900:#101828;--gray-950:#0C111D;
+--brand-25:#F5FAFF;--brand-50:#EFF8FF;--brand-100:#D1E9FF;--brand-200:#B2DDFF;--brand-300:#84CAFF;--brand-400:#53B1FD;--brand-500:#2E90FA;--brand-600:#1570EF;--brand-700:#175CD3;--brand-800:#1849A9;--brand-900:#194185;
+--navy-700:#1D2939;--navy-800:#182230;--navy-900:#101828;
+--teal-25:#F6FEFC;--teal-50:#F0FDF9;--teal-100:#CCFBEF;--teal-200:#99F6E0;--teal-300:#5FE9D0;--teal-400:#2ED3B7;--teal-500:#15B79E;--teal-600:#0E9384;--teal-700:#107569;--teal-800:#125D56;--teal-900:#134E48;
+--error-25:#FFFBFA;--error-50:#FEF3F2;--error-100:#FEE4E2;--error-200:#FECDCA;--error-300:#FDA29B;--error-400:#F97066;--error-500:#F04438;--error-600:#D92D20;--error-700:#B42318;--error-800:#912018;--error-900:#7A271A;
+--warning-25:#FFFCF5;--warning-50:#FFFAEB;--warning-100:#FEF0C7;--warning-200:#FEDF89;--warning-300:#FEC84B;--warning-400:#FDB022;--warning-500:#F79009;--warning-600:#DC6803;--warning-700:#B54708;--warning-800:#93370D;--warning-900:#7A2E0E;
+--orange-50:#FEF6EE;--orange-100:#FDEAD7;--orange-200:#F9DBAF;--orange-500:#EF6820;--orange-600:#E04F16;--orange-700:#B93815;
+--success-25:#F6FEF9;--success-50:#ECFDF3;--success-100:#D1FADF;--success-200:#A6F4C5;--success-300:#6CE9A6;--success-400:#32D583;--success-500:#12B76A;--success-600:#039855;--success-700:#027A48;--success-800:#05603A;--success-900:#054F31;
+--purple-50:#F9F5FF;--purple-100:#F4EBFF;--purple-300:#D6BBFB;--purple-600:#7F56D9;--purple-700:#6941C6;
+
+/* semantic */
+--bg-app:var(--gray-100);--bg-subtle:var(--gray-50);--surface-card:var(--base-white);--surface-raised:var(--base-white);--surface-nav:var(--navy-900);--surface-nav-hover:var(--navy-700);
+--text-primary:var(--gray-900);--text-secondary:var(--gray-700);--text-tertiary:var(--gray-600);--text-quaternary:var(--gray-500);--text-disabled:var(--gray-400);--text-on-brand:var(--base-white);--text-on-nav:#CECFD2;--text-link:var(--brand-700);
+--border-primary:var(--gray-300);--border-secondary:var(--gray-200);--border-strong:var(--gray-400);
+--action-primary:var(--brand-600);--action-primary-hover:var(--brand-700);--action-focus-ring:var(--brand-100);
+--ai-fg:var(--teal-700);--ai-bg:var(--teal-50);--ai-border:var(--teal-300);--ai-solid:var(--teal-600);
+--status-warn-fg:var(--warning-700);--status-warn-bg:var(--warning-50);--status-warn-border:var(--warning-300);--status-warn-solid:var(--warning-500);
+--status-danger-fg:var(--error-700);--status-danger-bg:var(--error-50);--status-danger-border:var(--error-300);--status-danger-solid:var(--error-600);
+--status-success-fg:var(--success-700);--status-success-bg:var(--success-50);--status-success-border:var(--success-300);--status-success-solid:var(--success-600);
+--status-info-fg:var(--brand-700);--status-info-bg:var(--brand-50);--status-info-border:var(--brand-300);
+--focus-highlight:var(--brand-600);--focus-highlight-bg:var(--brand-25);
+}

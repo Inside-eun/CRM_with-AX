@@ -1,0 +1,28 @@
+// AX CRM 컴포넌트 진입점. 타입은 각 컴포넌트의 .d.ts, 구현은 같은 이름의 .jsx에서 옵니다.
+export { CrmButton } from "./crm/actions/CrmButton";
+export { CrmAILabel, CrmConfidence, confidenceLevel } from "./crm/ai/CrmAILabel";
+export { CrmPolicyAlert } from "./crm/ai/CrmPolicyAlert";
+export { CrmStepGuide } from "./crm/ai/CrmStepGuide";
+export { CrmSuggestedReply } from "./crm/ai/CrmSuggestedReply";
+export { CrmAvatar } from "./crm/display/CrmAvatar";
+export { CrmBadge } from "./crm/display/CrmBadge";
+export { CrmCard } from "./crm/display/CrmCard";
+export { CrmChecklist } from "./crm/display/CrmChecklist";
+export { CrmKeyValue } from "./crm/display/CrmKeyValue";
+export { CrmMetric } from "./crm/display/CrmMetric";
+export { CrmTable } from "./crm/display/CrmTable";
+export { CrmTabs } from "./crm/display/CrmTabs";
+export { CrmTimeline } from "./crm/display/CrmTimeline";
+export { CrmInlineAlert } from "./crm/feedback/CrmInlineAlert";
+export { CrmSkeleton } from "./crm/feedback/CrmSkeleton";
+export { CrmCheckbox } from "./crm/forms/CrmCheckbox";
+export { CrmInput } from "./crm/forms/CrmInput";
+export { CrmSelect } from "./crm/forms/CrmSelect";
+export { CrmStatusSelect } from "./crm/forms/CrmStatusSelect";
+export { CrmTextarea } from "./crm/forms/CrmTextarea";
+export { CrmAppShell } from "./crm/layout/CrmAppShell";
+export { CrmGlobalNav } from "./crm/layout/CrmGlobalNav";
+export { CrmSidePanel } from "./crm/layout/CrmSidePanel";
+export { CrmTopBar } from "./crm/layout/CrmTopBar";
+export { Icon } from "./icons/Icon";
+export type { IconName } from "./icons/Icon";

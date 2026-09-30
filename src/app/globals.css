@@ -1,26 +1,46 @@
 @import "tailwindcss";
+@import "../design-system/styles.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/* AX CRM 토큰 중 Tailwind 유틸리티(text-gray-500, bg-teal-25 …)로 쓰는 값만 매핑합니다.
+ * 새 색을 유틸리티로 쓰려면 여기에 추가하세요. 컴포넌트 내부 스타일은 CSS 변수를 직접 참조합니다.
+ *
+ * 이름이 겹치는 Tailwind 기본 변수
+ * - --font-sans / --font-mono / --radius-* / --text-xs~xl 은 DS 토큰(base 레이어)이 우선합니다.
+ *   → font-sans = Inter + Pretendard, rounded-lg = 10px (Tailwind 기본 8px), rounded-md = 8px.
+ *   text-xs~xl 크기는 Tailwind 기본값과 같습니다.
+ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-gray-25: var(--gray-25);
+  --color-gray-50: var(--gray-50);
+  --color-gray-100: var(--gray-100);
+  --color-gray-200: var(--gray-200);
+  --color-gray-300: var(--gray-300);
+  --color-gray-400: var(--gray-400);
+  --color-gray-500: var(--gray-500);
+  --color-gray-600: var(--gray-600);
+  --color-gray-700: var(--gray-700);
+  --color-gray-800: var(--gray-800);
+  --color-gray-900: var(--gray-900);
+  --color-brand-25: var(--brand-25);
+  --color-brand-50: var(--brand-50);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-teal-25: var(--teal-25);
+  --color-teal-50: var(--teal-50);
+  --color-teal-200: var(--teal-200);
+  --color-teal-600: var(--teal-600);
+  --color-teal-700: var(--teal-700);
+  --color-warning-600: var(--warning-600);
+  --color-warning-700: var(--warning-700);
+  --color-error-600: var(--error-600);
+  --color-error-700: var(--error-700);
+  --color-success-600: var(--success-600);
+  --color-success-700: var(--success-700);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* AX CRM은 라이트 테마만 정의되어 있습니다. */
+:root {
+  color-scheme: light;
 }
