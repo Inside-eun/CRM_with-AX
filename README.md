@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CRM with AX — 고객 음성 상담 화면
 
-## Getting Started
+고객 음성을 텍스트로 변환하고 문의 유형을 AI로 분류한 뒤, 상담원이 **상담 홈 → 사전 브리핑 → 실시간 상담 → 상담 후처리 → 상담 이력**까지 처리하는 CRM 상담원 화면입니다. UI는 AX CRM 디자인 시스템(`src/design-system`)을 사용합니다.
 
-First, run the development server:
+## 실행
 
 ```bash
+npm install
+echo "OPENAI_API_KEY=sk-..." > .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `http://localhost:3000` — 상담원 화면
+- `http://localhost:3000/classifier` — 음성 분류 단독 도구
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 구조
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| 경로 | 내용 |
+| --- | --- |
+| `src/app/api/classify` | 음성 → Whisper 텍스트 변환 → 문의 유형·핵심 요청 분류 |
+| `src/app/api/summarize` | 상담 기록 → 후처리 AI 요약 초안 |
+| `src/app/(crm)` | 상담 홈, 사전 브리핑, 실시간 상담, 후처리, 상담 이력, 지식·매뉴얼 라우트 |
+| `src/components/crm` | 화면 컴포넌트와 앱 셸, 처리 기능 확정 대화상자 |
+| `src/lib/crm` | 상담 상태 저장소, 상태 변경 로직, 문의 유형별 매뉴얼, 목 데이터 |
+| `src/lib/useVoiceClassify.ts` | 녹음·업로드·분류 요청 훅 |
+| `src/design-system` | AX CRM 토큰·컴포넌트·아이콘 (가져온 범위와 변경점은 해당 README 참고) |
 
-## Learn More
+## 기능 구분
 
-To learn more about Next.js, take a look at the following resources:
+| 구분 | 내용 |
+| --- | --- |
+| 실제 기능 | 음성 인식·AI 분류, 핵심 요청 추출, 통화 중 음성 인식과 AI 유형 변경 제안, 후처리 AI 요약 |
+| 목 데이터 기반 | 고객·주문·대기열·과거 이력, 문의 유형별 매뉴얼·정책, 본인 확인 대조, 처리 기능(회수·교환·환불·결제 취소 등) 접수 |
+| 백엔드 연동 필요 | 상담 기록 저장(현재 브라우저 localStorage), 고객·주문 API, 처리 기능 API, 실시간 통화 연동 |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 상담 원칙
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- AI 분류와 요약은 제안입니다. 상담사가 확인한 뒤에만 확정됩니다.
+- 분류 신뢰도가 65% 미만이거나 음성 인식에 실패하면 상담사가 문의 유형을 직접 선택합니다.
+- 본인 확인 전에는 민감 정보를 가리고 처리 기능을 막습니다 (담당자 이관·콜백 제외).
+- 환불·반품·결제 취소는 필수 안내 체크와 고객 동의 체크를 거쳐야 확정됩니다.
