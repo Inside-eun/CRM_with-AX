@@ -562,7 +562,7 @@ function ConversationCard({ session, hold }: { session: Session; hold: boolean }
           </div>
         )}
       </div>
-      {voice.status === "recording" && <RecordingIndicator />}
+      {voice.status === "recording" && <RecordingIndicator level={voice.inputLevel} />}
       {voiceError && (
         <CrmInlineAlert tone="danger" title="통화 음성 인식에 실패했습니다" onClose={() => setVoiceError(null)}>
           {voiceError} 메모에 직접 기록하고 상담을 계속하세요.

@@ -208,7 +208,7 @@ function IntakeCard({ session }: { session: Session }) {
     >
       {voice.status === "recording" ? (
         <div className="flex flex-col items-start gap-3">
-          <RecordingIndicator />
+          <RecordingIndicator level={voice.inputLevel} />
           <VoiceCaptureButtons voice={voice} size="sm" />
         </div>
       ) : voice.status === "uploading" ? (
