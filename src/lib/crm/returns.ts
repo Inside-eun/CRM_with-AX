@@ -34,23 +34,34 @@ export const VERDICT_LABEL: Record<Verdict, string> = { ok: "가능", no: "불�
 
 export type Basis = { id: string; label: string; verdict: Verdict; text: string };
 
-/** cancel = 출고 전 결제 취소, return = 배송 후 반품, exchange = 교환, method_change = 결제 수단 변경 */
-export type RequestFlow = "cancel" | "return" | "exchange" | "method_change";
+/**
+ * cancel = 출고 전 결제 취소, refuse = 배송 중 반품(수취 거부), return = 수령 후 반품, exchange = 교환,
+ * method_change = 결제 수단 변경, deposit = 무통장 입금 계좌 안내
+ */
+export type RequestFlow = "cancel" | "refuse" | "return" | "exchange" | "method_change" | "deposit";
 
 export const FLOW_LABEL: Record<RequestFlow, string> = {
   cancel: "출고 전 결제 취소(환불)",
+  refuse: "환불 · 배송 중 반품(수취 거부)",
   return: "환불 · 배송 후 반품",
   exchange: "교환",
   method_change: "결제 수단 변경",
+  deposit: "무통장 입금 계좌 안내",
 };
 
 /** 이 흐름에서 접수하는 처리 기능 */
 export const FLOW_SUBMIT_ACTION: Record<RequestFlow, ActionId> = {
   cancel: "payment_cancel",
+  refuse: "return_refuse",
   return: "return_pickup",
   exchange: "exchange",
   method_change: "payment_change",
+  deposit: "deposit_sms",
 };
+
+export const DEPOSIT_BANKS = ["신한은행", "국민은행", "우리은행", "하나은행", "농협은행"];
+/** 무통장 입금 기한 (주문 후) */
+export const DEPOSIT_DUE_HOURS = 24;
 
 /** 요청 구분을 고르는 문의 유형과 그 선택지 */
 export const REQUEST_KINDS: Partial<Record<CategoryId, { id: RequestKind; label: string }[]>> = {
@@ -61,6 +72,7 @@ export const REQUEST_KINDS: Partial<Record<CategoryId, { id: RequestKind; label:
   payment: [
     { id: "cancel", label: "결제 취소" },
     { id: "method_change", label: "결제 수단 변경" },
+    { id: "deposit_info", label: "입금 계좌 안내" },
   ],
 };
 
@@ -103,7 +115,12 @@ const NO_REASON_PHRASE: Record<string, string> = {
   policy: "이 상품은 상품별 정책상 단순 변심으로",
   dup: "이미 접수된 건이 있어 새로",
   option: "희망하신 옵션의 재고가 없어 해당 옵션으로는",
+  as: "AS 진행을 유지하기로 하셔서",
 };
+
+/** 수량 단위 */
+export const unitOf = (order: Order) => order.unit ?? "개";
+const unitPrice = (order: Order) => Math.round(order.price / order.qty);
 
 /** 추가 확인이 필요한 근거별 상담사 할 일 */
 function checkAction(b: Basis, order: Order): string {
@@ -117,7 +134,13 @@ function checkAction(b: Basis, order: Order): string {
     case "policy":
       return order.returnPolicy ? "요청 사유 확인 (단순 변심이면 상품별 정책상 불가)" : "지식·매뉴얼에서 상품별 반품 정책 확인";
     case "period":
-      return "불량·오배송인지 확인 (30일 기준 적용)";
+      return `불량·오배송인지 확인 (${defectWindow(order)}일 기준 적용)`;
+    case "as":
+      return `진행 중 AS(${order.openAs?.receiptNo}) 취소 후 진행할지 고객에게 확인`;
+    case "qty":
+      return "고객이 주문한 수량·금액 확인";
+    case "bank":
+      return "입금하실 은행 확인";
     case "option":
       return order.exchangeOptions?.length ? "고객 희망 옵션 확인" : "상품 MD팀에 교환 옵션·재고 확인 (담당자 이관)";
     default:
@@ -136,19 +159,29 @@ export function requestFlow(session: Session, order?: Order): RequestFlow | unde
   const kind = session.request?.kind;
   if (!kind) return undefined;
   if (session.category === "payment") {
-    return kind === "method_change" ? "method_change" : kind === "cancel" ? "cancel" : undefined;
+    if (kind === "method_change") return "method_change";
+    if (kind === "deposit_info") return "deposit";
+    return kind === "cancel" ? "cancel" : undefined;
   }
   if (session.category !== "refund_exchange") return undefined;
   if (kind === "exchange") return "exchange";
   if (kind !== "refund") return undefined;
+  // 접수 후 주문 상태가 바뀌어도 흐름이 바뀌지 않도록 이미 접수한 처리를 먼저 봅니다.
   if (session.actions.some((a) => a.actionId === "payment_cancel")) return "cancel";
-  return order?.status === "결제 완료" ? "cancel" : "return";
+  if (session.actions.some((a) => a.actionId === "return_refuse")) return "refuse";
+  if (order?.status === "결제 완료") return "cancel";
+  // 출고 후 배송 중이면 즉시 취소 대신 반품으로 접수하고 고객이 수취 거부합니다.
+  if (order?.status === "배송 중") return "refuse";
+  return "return";
 }
+
+/** 불량·오배송 반품·교환 가능 기간. 상품별 품질보증 기간이 있으면 그 기간을 씁니다. */
+export const defectWindow = (order: Order) => order.returnPolicy?.defectWindowDays ?? DEFECT_WINDOW_DAYS;
 
 /** 사유별 반품 기한. 사유를 모르면 단순 변심 기준(짧은 기한)으로 보여 줍니다. */
 export function returnDeadlineFor(order: Order, reason?: ReturnReason): string | undefined {
   if (!order.deliveredAt) return undefined;
-  const days = isDefectReason(reason) ? DEFECT_WINDOW_DAYS : RETURN_WINDOW_DAYS;
+  const days = isDefectReason(reason) ? defectWindow(order) : RETURN_WINDOW_DAYS;
   return new Date(new Date(order.deliveredAt).getTime() + days * 86400000).toISOString();
 }
 
@@ -170,7 +203,8 @@ export function exchangePriceDiff(order: Order, label?: string): number | undefi
 function periodBasis(order: Order, reason?: ReturnReason): Basis {
   const since = calendarDaysBetween(order.deliveredAt!);
   const simpleLeft = RETURN_WINDOW_DAYS - since;
-  const defectLeft = DEFECT_WINDOW_DAYS - since;
+  const window = defectWindow(order);
+  const defectLeft = window - since;
   const simpleEnd = fmtDate(returnDeadlineFor(order, "단순 변심")!);
   const defectEnd = fmtDate(returnDeadlineFor(order, "상품 불량")!);
   const label = "반품·교환 기간";
@@ -182,7 +216,7 @@ function periodBasis(order: Order, reason?: ReturnReason): Basis {
   if (isDefectReason(reason)) {
     return defectLeft >= 0
       ? { id: "period", label, verdict: "ok", text: `수령 후 ${since}일 · 불량·오배송 기한 ${defectEnd}까지` }
-      : { id: "period", label, verdict: "no", text: `수령 후 ${since}일 · 불량·오배송 기한(${DEFECT_WINDOW_DAYS}일) ${defectEnd} 경과` };
+      : { id: "period", label, verdict: "no", text: `수령 후 ${since}일 · 불량·오배송 기한(${window}일) ${defectEnd} 경과` };
   }
   // 사유 미확인: 기한이 사유마다 달라 확정하지 않습니다.
   if (simpleLeft >= 0) {
@@ -199,22 +233,45 @@ function periodBasis(order: Order, reason?: ReturnReason): Basis {
   return { id: "period", label, verdict: "no", text: `수령 후 ${since}일 · 모든 반품·교환 기한 경과` };
 }
 
-function returnBases(order: Order, req: ReturnRequest): Basis[] {
-  const bases: Basis[] = [periodBasis(order, req.reason)];
-  const reason = req.reason;
-
-  bases.push(
-    reason
+function reasonBasis(reason?: ReturnReason): Basis {
+  return reason
       ? {
           id: "reason",
           label: "요청 사유",
           verdict: "ok",
           text: isDefectReason(reason) ? `${reason} · 배송비 회사 부담 정책(3.4조)` : "단순 변심 · 왕복 배송비 고객 부담 정책(3.2조)",
         }
-      : { id: "reason", label: "요청 사유", verdict: "check", text: "단순 변심인지 불량·오배송인지 확인 필요 (기한·배송비가 달라집니다)" },
-  );
+      : { id: "reason", label: "요청 사유", verdict: "check", text: "단순 변심인지 불량·오배송인지 확인 필요 (기한·배송비가 달라집니다)" };
+}
 
-  if (isDefectReason(reason)) {
+function policyBasis(order: Order, reason?: ReturnReason): Basis {
+  const policy = order.returnPolicy;
+  if (!policy) return { id: "policy", label: "상품별 정책", verdict: "check", text: "주문에 상품 정책 정보가 없음 · 지식·매뉴얼에서 확인 필요" };
+  if (!policy.simpleChange && reason === "단순 변심") return { id: "policy", label: "상품별 정책", verdict: "no", text: policy.note };
+  if (!policy.simpleChange && !reason) return { id: "policy", label: "상품별 정책", verdict: "check", text: `${policy.note} · 사유 확인 필요` };
+  return { id: "policy", label: "상품별 정책", verdict: "ok", text: policy.note };
+}
+
+/** 진행 중인 AS가 있으면 고객이 AS를 취소하고 진행할지 확인합니다. */
+function asBasis(order: Order, req: ReturnRequest): Basis | undefined {
+  if (!order.openAs) return undefined;
+  const label = "진행 중 AS";
+  const as = order.openAs.receiptNo;
+  if (req.asDecision === "cancel_as") return { id: "as", label, verdict: "ok", text: `${as} 취소 후 진행 (고객 요청)` };
+  if (req.asDecision === "keep_as") return { id: "as", label, verdict: "no", text: `${as} 유지 · AS 결과를 기다리기로 함` };
+  return { id: "as", label, verdict: "check", text: `${as} 접수 중 (${order.openAs.symptom}) · AS 취소 후 진행할지 확인 필요` };
+}
+
+function returnBases(order: Order, req: ReturnRequest): Basis[] {
+  const bases: Basis[] = [periodBasis(order, req.reason)];
+  const reason = req.reason;
+
+  bases.push(reasonBasis(reason));
+
+  if (isDefectReason(reason) && order.openAs) {
+    // 이미 접수된 AS 내역으로 증상이 기록되어 있으면 사진을 다시 받지 않습니다.
+    bases.push({ id: "evidence", label: "불량·오배송 확인", verdict: "ok", text: `AS 접수 내역(${order.openAs.receiptNo})으로 증상 확인` });
+  } else if (isDefectReason(reason)) {
     bases.push(
       req.evidence === "confirmed"
         ? { id: "evidence", label: "불량·오배송 확인", verdict: "ok", text: "사진·내용 확인함" }
@@ -234,16 +291,9 @@ function returnBases(order: Order, req: ReturnRequest): Basis[] {
     );
   }
 
-  const policy = order.returnPolicy;
-  if (!policy) {
-    bases.push({ id: "policy", label: "상품별 정책", verdict: "check", text: "주문에 상품 정책 정보가 없음 · 지식·매뉴얼에서 확인 필요" });
-  } else if (!policy.simpleChange && reason === "단순 변심") {
-    bases.push({ id: "policy", label: "상품별 정책", verdict: "no", text: policy.note });
-  } else if (!policy.simpleChange && !reason) {
-    bases.push({ id: "policy", label: "상품별 정책", verdict: "check", text: `${policy.note} · 사유 확인 필요` });
-  } else {
-    bases.push({ id: "policy", label: "상품별 정책", verdict: "ok", text: policy.note });
-  }
+  bases.push(policyBasis(order, reason));
+  const as = asBasis(order, req);
+  if (as) bases.push(as);
   return bases;
 }
 
@@ -388,6 +438,136 @@ export function assessRequest(session: Session, order?: Order): Assessment {
     };
   }
 
+  if (flow === "refuse") {
+    // 출고 후 배송 중: 즉시 취소 대신 반품으로 접수하고, 고객이 배송 기사에게 수취 거부(반송)를 요청합니다.
+    const reason = req.reason;
+    const bases: Basis[] = [
+      submitted || order.status === "배송 중"
+        ? { id: "ship", label: "배송 상태", verdict: "ok", text: "출고 후 배송 중 · 즉시 취소 불가, 반품 접수 후 수취 거부" }
+        : { id: "ship", label: "배송 상태", verdict: "no", text: `${order.status} · 수취 거부 반품 대상 아님` },
+      reasonBasis(reason),
+      policyBasis(order, reason),
+      dup,
+    ];
+    const verdict = aggregate(bases);
+    const why = bases.find((b) => b.verdict === "no");
+    const simple = reason === "단순 변심";
+    const defect = isDefectReason(reason);
+    return {
+      flow,
+      verdict,
+      submitted,
+      basis: bases,
+      title:
+        verdict === "ok"
+          ? "반품(수취 거부) 접수 가능"
+          : verdict === "no"
+            ? `반품 접수 불가 · ${why!.label}`
+            : `추가 확인 필요 · ${bases.filter((b) => b.verdict === "check").map((b) => b.label).join(", ")}`,
+      script:
+        verdict === "ok"
+          ? `상품이 이미 출고되어 바로 취소는 어렵고, 반품으로 접수해 드리겠습니다. 배송 기사님께 연락이 오면 취소 요청한 상품이라 반송해 달라고(수취 거부) 말씀해 주세요. 반송 상품 입고가 확인되면 평일 기준 3~4일 안에 환불됩니다.${
+              simple ? ` 단순 변심이라 왕복 배송비 ${fmtWon(RETURN_SHIPPING_FEE)}은 환불 금액에서 차감됩니다.` : ""
+            }`
+          : verdict === "no"
+            ? `죄송하지만 확인해 보니 ${NO_REASON_PHRASE[why!.id] ?? "처리 조건에 맞지 않아"} 반품 접수가 어렵습니다.`
+            : "상품이 이미 출고되어 즉시 취소는 어렵고 반품으로 진행해야 합니다. 취소하시려는 이유를 여쭤봐도 될까요?",
+      alternative:
+        verdict === "no"
+          ? why!.id === "policy"
+            ? "상품에 문제가 있다면 받아 보신 뒤 불량으로 접수해 드릴 수 있습니다."
+            : "이미 접수된 건의 진행 상황을 확인해 안내해 드리겠습니다."
+          : undefined,
+      next:
+        verdict === "ok"
+          ? ["출고 후라 즉시 취소 불가 · 반품(수취 거부)으로 진행 안내", "수취 거부 방법과 환불 일정 안내", "고객 동의 후 반품(수취 거부) 접수"]
+          : verdict === "no"
+            ? ["불가 사유 안내", why!.id === "policy" ? "불량이면 수령 후 불량으로 접수 안내" : "기존 접수 건 진행 상황 확인·안내"]
+            : [...bases.filter((b) => b.verdict === "check").map((b) => checkAction(b, order)), HANDOFF_HINT],
+      costs: [
+        {
+          label: "반품 배송비",
+          value: simple
+            ? `왕복 ${fmtWon(RETURN_SHIPPING_FEE)} · 고객 부담 (환불액에서 차감)`
+            : defect
+              ? "회사 부담"
+              : `사유 확인 후 결정 (단순 변심 시 ${fmtWon(RETURN_SHIPPING_FEE)})`,
+        },
+        {
+          label: "예상 환불액",
+          value: simple
+            ? fmtWon(order.price - RETURN_SHIPPING_FEE)
+            : defect
+              ? `${fmtWon(order.price)} (전액)`
+              : `${fmtWon(order.price - RETURN_SHIPPING_FEE)} ~ ${fmtWon(order.price)}`,
+          highlight: true,
+        },
+        { label: "예상 일정", value: "수취 거부 → 반송 상품 입고 확인 → 평일 3~4일 내 환불" },
+      ],
+    };
+  }
+
+  if (flow === "deposit") {
+    const unit = unitOf(order);
+    const fixDone = session.actions.find((a) => a.actionId === "order_fix" && a.orderNo === order.no);
+    const qty = req.confirmedQty;
+    const amount = qty ? unitPrice(order) * qty : order.price;
+    const bases: Basis[] = [
+      order.payMethod.startsWith("무통장")
+        ? { id: "pay", label: "결제 수단", verdict: "ok", text: order.payMethod }
+        : { id: "pay", label: "결제 수단", verdict: "no", text: `${order.payMethod} · 무통장 입금 주문이 아님` },
+      submitted || order.status === "입금 대기"
+        ? { id: "status", label: "주문 상태", verdict: "ok", text: "입금 대기 · 입금 계좌 재안내 가능" }
+        : { id: "status", label: "주문 상태", verdict: "no", text: `${order.status} · 입금 계좌 안내 대상 아님` },
+      !qty
+        ? { id: "qty", label: "주문 수량", verdict: "check", text: `현재 ${order.qty}${unit} · 고객이 주문한 수량 확인 필요` }
+        : qty === order.qty
+          ? { id: "qty", label: "주문 수량", verdict: "ok", text: fixDone ? `${qty}${unit}로 정정 접수함 (${fixDone.receiptNo})` : `${qty}${unit} · 주문 내용 일치` }
+          : { id: "qty", label: "주문 수량", verdict: "ok", text: `고객 확인 ${qty}${unit} · 접수된 ${order.qty}${unit} → 수량 정정 필요` },
+      req.depositBank
+        ? { id: "bank", label: "입금 은행", verdict: "ok", text: req.depositBank }
+        : { id: "bank", label: "입금 은행", verdict: "check", text: "입금하실 은행 확인 필요" },
+    ];
+    const verdict = aggregate(bases);
+    const needsFix = !!qty && qty !== order.qty;
+    return {
+      flow,
+      verdict,
+      submitted,
+      basis: bases,
+      title:
+        verdict === "ok"
+          ? needsFix
+            ? "입금 계좌 안내 가능 · 수량 정정 먼저"
+            : "입금 계좌 안내 가능"
+          : verdict === "no"
+            ? `입금 계좌 안내 불가 · ${bases.find((b) => b.verdict === "no")!.label}`
+            : `추가 확인 필요 · ${bases.filter((b) => b.verdict === "check").map((b) => b.label).join(", ")}`,
+      script:
+        verdict === "ok"
+          ? `${needsFix ? `주문을 ${qty}${unit}로 다시 접수해 드리겠습니다. ` : ""}입금하실 금액은 ${fmtWon(amount)}이고, ${req.depositBank} 입금 계좌번호를 바로 문자로 보내드리겠습니다. 주문 후 ${DEPOSIT_DUE_HOURS}시간 안에 입금해 주세요.`
+          : verdict === "no"
+            ? "확인해 보니 입금 계좌를 안내해 드릴 수 있는 주문이 아닙니다."
+            : "입금 계좌를 다시 보내드리기 전에 주문하신 수량과 입금하실 은행을 확인하겠습니다.",
+      next:
+        verdict === "ok"
+          ? [
+              ...(needsFix && !fixDone ? [`주문 수량 정정 접수 (${order.qty}${unit} → ${qty}${unit})`] : []),
+              "입금 금액·기한 안내",
+              "입금 계좌 문자 발송",
+            ]
+          : verdict === "no"
+            ? ["불가 사유 안내", "결제 상태 확인 후 필요하면 결제팀 이관"]
+            : [...bases.filter((b) => b.verdict === "check").map((b) => checkAction(b, order)), HANDOFF_HINT],
+      alternative: verdict === "no" ? "결제 상태를 다시 확인해 안내해 드리겠습니다." : undefined,
+      costs: [
+        { label: "입금 금액", value: `${fmtWon(amount)}${qty ? ` (${qty}${unit})` : " (현재 주문 기준)"}`, highlight: true },
+        { label: "입금 계좌", value: req.depositBank ? `${req.depositBank} · 문자 발송` : "은행 확인 후 문자 발송" },
+        { label: "입금 기한", value: `주문 후 ${DEPOSIT_DUE_HOURS}시간 · 미입금 시 자동 취소` },
+      ],
+    };
+  }
+
   const noun = flow === "exchange" ? "교환" : "반품";
   if (!order.deliveredAt) {
     const bases: Basis[] = [
@@ -450,10 +630,11 @@ export function assessRequest(session: Session, order?: Order): Assessment {
   const fee = simple ? `왕복 배송비 ${fmtWon(RETURN_SHIPPING_FEE)}은 고객님 부담입니다` : "배송비는 저희가 부담합니다";
 
   let script: string;
+  const asNote = order.openAs && req.asDecision === "cancel_as" ? `접수된 AS(${order.openAs.receiptNo})는 취소하고 ` : "";
   if (verdict === "ok") {
     script =
       flow === "exchange"
-        ? `확인 결과 ${req.exchangeOption} 옵션으로 교환 접수가 가능합니다. ${fee}. 회수 후 검수가 끝나면 교환 상품을 보내드립니다.`
+        ? `확인 결과 ${asNote}${req.exchangeOption} 옵션으로 교환 접수가 가능합니다. ${fee}. 회수 후 검수가 끝나면 교환 상품을 보내드립니다.`
         : `확인 결과 반품 접수가 가능합니다. ${fee}${simple ? "(환불 금액에서 차감)" : ""}. 회수된 상품 검수가 끝나면 환불이 진행됩니다.`;
   } else if (verdict === "no") {
     const why = bases.find((b) => b.verdict === "no")!;
@@ -537,6 +718,10 @@ export function assessRequest(session: Session, order?: Order): Assessment {
           req.reason === "단순 변심" && defectStillOpen
             ? "상품에 불량이 있거나 다른 상품이 왔다면 수령 후 30일까지 접수할 수 있어 확인해 드리겠습니다."
             : "불편을 드려 죄송합니다. 말씀하신 내용은 담당 부서에 전달해 드리겠습니다.";
+        break;
+      case "as":
+        next = ["AS를 유지하기로 해 교환·반품은 접수하지 않음 안내", "AS 점검 결과 안내 일정 확인"];
+        alternative = "AS 점검 결과가 나오면 연락드리겠습니다. 수리가 어렵거나 같은 증상이 반복되면 그때 교환으로 진행할 수 있습니다.";
         break;
       case "condition":
       case "policy":

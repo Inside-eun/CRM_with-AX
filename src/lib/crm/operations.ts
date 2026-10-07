@@ -323,6 +323,13 @@ export function performAction(actionId: ActionId, values: Record<string, string>
     if (actionId === "tracking" && order?.tracking?.[0]) {
       detail = `${order.tracking[0].title} · ${order.tracking[0].desc ?? ""}`.trim();
     }
+    if (actionId === "order_fix" && order) {
+      detail = `${order.qty}${order.unit ?? "개"} → ${values.qty}${order.unit ?? "개"} · 입금 금액 ${fmtWon(Math.round(order.price / order.qty) * Number(values.qty))}`;
+    }
+    // 진행 중 AS를 취소하고 교환·반품하기로 했으면 처리 기록에 함께 남깁니다.
+    if ((actionId === "exchange" || actionId === "return_pickup") && order?.openAs && s.request?.asDecision === "cancel_as") {
+      detail = `${detail ? `${detail} · ` : ""}기존 AS(${order.openAs.receiptNo}) 취소`;
+    }
     performed = {
       id: uid("A"),
       actionId,
@@ -333,10 +340,16 @@ export function performAction(actionId: ActionId, values: Record<string, string>
       detail,
       values,
     };
-    const orders =
+    let orders =
       def.orderStatus && order
         ? state.orders.map((o) => (o.no === order.no ? { ...o, status: def.orderStatus! } : o))
         : state.orders;
+    // 수량 정정은 데모 주문의 수량·금액을 고객이 확인한 값으로 바꿉니다(실제 주문 변경 없음).
+    const fixedQty = Number(values.qty);
+    if (actionId === "order_fix" && order && fixedQty > 0) {
+      const unit = Math.round(order.price / order.qty);
+      orders = orders.map((o) => (o.no === order.no ? { ...o, qty: fixedQty, price: unit * fixedQty } : o));
+    }
     const line = `[처리] ${def.label}${performed.receiptNo ? ` (${performed.receiptNo})` : ""}${detail ? ` · ${detail}` : ""}`;
     return { ...state, orders, session: { ...s, actions: [...s.actions, performed], memo: appendLine(s.memo, line) } };
   });

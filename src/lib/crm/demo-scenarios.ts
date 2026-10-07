@@ -28,31 +28,34 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     id: "cancel_return",
     no: 1,
     label: "주문 취소·반품 요청",
-    situation: "받은 린넨 셔츠 원피스가 맞지 않아 주문을 취소하고 환불받고 싶은 고객입니다. 이미 배송이 끝나 반품 조건을 확인해야 합니다.",
+    situation:
+      "주문한 스포츠 롱 벤치코트(블랙/90)를 취소하려는 고객입니다. 다른 곳에서 비슷한 상품을 샀다고 합니다. 이미 출고되어 즉시 취소 대신 반품(수취 거부)으로 진행합니다.",
     audioSrc: "/demo-audio/01-cancel-return.m4a",
     recording: "call",
     customerId: "C-10231",
-    orderItem: "린넨 셔츠 원피스",
+    orderItem: "스포츠 롱 벤치코트",
   },
   {
     id: "exchange",
     no: 2,
     label: "제품 교환 요청",
-    situation: "받은 오버핏 후드티를 다른 사이즈·색상으로 바꾸고 싶은 고객입니다. 희망 옵션의 재고에 따라 교환 가능 여부가 달라집니다.",
+    situation:
+      "6월에 산 구강 세정기가 작동이 됐다 안 됐다 해서 교환을 원하는 고객입니다. 이미 AS가 접수되어 있어 AS를 취소하고 교환할지 확인합니다.",
     audioSrc: "/demo-audio/02-exchange.m4a",
     recording: "call",
     customerId: "C-18820",
-    orderItem: "오버핏 후드티",
+    orderItem: "동복제약 벤트릭스 구강 세정기",
   },
   {
-    id: "payment_change",
+    id: "deposit_info",
     no: 3,
-    label: "결제 수단 변경 요청",
-    situation: "어제 주문한 가죽 카드지갑의 결제 수단을 바꾸고 싶은 고객입니다. 아직 출고 전이라 기존 결제 취소 후 재결제로 진행합니다.",
-    audioSrc: "/demo-audio/03-payment-change.m4a",
+    label: "무통장 입금 계좌 안내 요청",
+    situation:
+      "영광 모시떡을 무통장 입금으로 주문했는데 계좌번호 문자를 받지 못한 고객입니다. 주문이 2세트로 잘못 접수되어 1세트로 정정한 뒤 입금 계좌를 다시 보냅니다.",
+    audioSrc: "/demo-audio/03-deposit-account.m4a",
     recording: "call",
     customerId: "C-00982",
-    orderItem: "가죽 카드지갑",
+    orderItem: "영광 모시떡",
   },
 ];
 

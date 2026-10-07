@@ -11,7 +11,7 @@ import {
   returnDaysLeft,
   returnDeadline,
 } from "./format";
-import { FLOW_LABEL, assessRequest, hasRequestFlow, requestFlow, type RequestFlow } from "./returns";
+import { DEPOSIT_BANKS, FLOW_LABEL, assessRequest, hasRequestFlow, requestFlow, type RequestFlow } from "./returns";
 import type { ActionId, Customer, HistoryRecord, Order, OrderStatus, Session } from "./types";
 
 export type Policy = { id: string; name: string; revisedAt: string; text: string };
@@ -27,7 +27,13 @@ export const POLICIES: Policy[] = [
     id: "p-defect",
     name: "반품·교환 정책 3.4조 (불량·오배송)",
     revisedAt: "2026.08.01",
-    text: "상품 불량이나 오배송은 수령 후 30일 이내에 반품·교환할 수 있으며 배송비는 회사가 부담합니다. 불량 사진을 요청해 회수 메모에 남깁니다.",
+    text: "상품 불량이나 오배송은 수령 후 30일 이내에 반품·교환할 수 있으며 배송비는 회사가 부담합니다. 가전 등 품질보증 기간이 정해진 상품은 그 기간(예: 1년) 안의 제품 하자를 교환 또는 AS로 처리합니다. 불량 사진을 요청해 회수 메모에 남기며, 이미 AS가 접수된 상품은 AS를 취소한 뒤 교환을 접수합니다.",
+  },
+  {
+    id: "p-refuse",
+    name: "반품·교환 정책 3.3조 (배송 중 취소)",
+    revisedAt: "2026.08.01",
+    text: "출고 후 배송 중인 주문은 즉시 취소할 수 없어 반품으로 접수합니다. 고객이 배송 기사에게 수취 거부(반송)를 요청하고, 반송 상품이 입고 확인되면 평일 기준 3~4일 내 환불합니다. 단순 변심이면 왕복 배송비 6,000원을 환불 금액에서 차감합니다.",
   },
   {
     id: "p-refund",
@@ -45,7 +51,7 @@ export const POLICIES: Policy[] = [
     id: "p-payment",
     name: "결제 취소 기준 4.1조",
     revisedAt: "2026.05.02",
-    text: "출고 전 주문은 즉시 결제 취소할 수 있습니다. 출고 후 주문은 반품 절차로 진행합니다. 카드사 반영까지 영업일 기준 3~5일이 걸린다고 안내합니다. 결제 수단 변경은 출고 전 주문에 한해 기존 결제를 취소하고 새 결제 수단으로 재결제하는 방식으로 진행하며, 재결제 전까지 출고를 보류합니다.",
+    text: "출고 전 주문은 즉시 결제 취소할 수 있습니다. 출고 후 주문은 반품 절차로 진행합니다. 카드사 반영까지 영업일 기준 3~5일이 걸린다고 안내합니다. 결제 수단 변경은 출고 전 주문에 한해 기존 결제를 취소하고 새 결제 수단으로 재결제하는 방식으로 진행하며, 재결제 전까지 출고를 보류합니다. 무통장 입금 주문은 주문 후 24시간 안에 입금하지 않으면 자동 취소되며, 입금 계좌는 본인 확인 후 문자로 다시 보낼 수 있습니다. 주문 수량이 잘못 접수된 경우 입금 전에 수량을 정정해 입금 금액을 다시 안내합니다.",
   },
   {
     id: "p-as",
@@ -202,7 +208,7 @@ export const PLAYBOOKS: Record<CategoryId, Playbook> = {
       },
     ],
     actions: ["return_pickup", "exchange", "refund"],
-    policies: ["p-return", "p-defect", "p-refund"],
+    policies: ["p-return", "p-refuse", "p-defect", "p-refund"],
     tags: ["사이즈 불만", "배송비 문의", "환불 시점", "색상 교환", "상품 불량"],
   },
   shipping: {
@@ -367,9 +373,9 @@ export const PLAYBOOKS: Record<CategoryId, Playbook> = {
         requiredFor: ["payment_cancel"],
       },
     ],
-    actions: ["payment_cancel"],
+    actions: ["payment_cancel", "payment_change", "deposit_sms"],
     policies: ["p-payment", "p-refund"],
-    tags: ["이중 결제", "결제 취소", "승인 오류"],
+    tags: ["이중 결제", "결제 취소", "승인 오류", "입금 계좌", "수량 정정"],
   },
   complaint: {
     category: "complaint",
@@ -624,6 +630,126 @@ export const REQUEST_PLAYBOOKS: Record<RequestFlow, Playbook> = {
     ],
     actions: ["exchange"],
   },
+  refuse: {
+    ...RX,
+    title: FLOW_LABEL.refuse,
+    summary:
+      "출고 후 배송 중인 주문은 즉시 취소할 수 없어 반품으로 접수합니다. 고객이 수취 거부(반송)하면 반송 상품 입고 확인 후 평일 3~4일 내 환불됩니다.",
+    steps: [
+      VERIFY_STEP,
+      ORDER_STEP,
+      REQUEST_STEP,
+      {
+        id: "eligible",
+        label: "반품 조건 확인 (배송 중)",
+        hint: "배송 상태, 취소 사유, 상품별 정책, 중복 접수를 확인하세요.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
+      },
+      {
+        id: "refuse_guide",
+        label: "수취 거부 방법·비용 안내",
+        hint: "배송 기사 연락 시 반송을 요청하도록 안내하고, 단순 변심이면 배송비 차감을 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "refuse_guide" },
+      },
+      {
+        id: "refuse",
+        label: "반품(수취 거부) 접수",
+        hint: "고객 동의를 받은 뒤 확정하세요. 반송·입고 전까지 환불은 완료가 아닙니다.",
+        target: "하단 · 반품(수취 거부) 접수",
+        doneWhen: { type: "action", ids: ["return_refuse"] },
+      },
+      {
+        id: "refund_timing",
+        label: "환불 일정 안내",
+        hint: "반송 상품 입고 확인 후 평일 3~4일 내 환불됩니다.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "refuse_refund_timing" },
+      },
+    ],
+    notices: [
+      {
+        id: "refuse_guide",
+        label: "수취 거부 방법·배송비",
+        script:
+          "배송 기사님께 배송 예정 연락이 오면 취소 요청한 상품이니 반송해 달라고 말씀해 주세요. 단순 변심이면 왕복 배송비 6,000원이 환불 금액에서 차감됩니다.",
+        policyId: "p-refuse",
+        requiredFor: ["return_refuse"],
+      },
+      {
+        id: "refuse_refund_timing",
+        label: "환불 일정",
+        script: "반송된 상품이 저희 쪽에 정상 입고된 것이 확인되면 평일 기준 3~4일 안에 환불됩니다.",
+        policyId: "p-refuse",
+      },
+    ],
+    actions: ["return_refuse"],
+    policies: ["p-refuse", "p-return", "p-refund"],
+  },
+  deposit: {
+    ...PLAYBOOKS.payment,
+    title: FLOW_LABEL.deposit,
+    summary:
+      "무통장 입금 주문의 입금 계좌를 다시 안내합니다. 주문 수량이 잘못 접수됐으면 입금 전에 정정하고, 정정된 금액과 입금 기한을 안내한 뒤 계좌를 문자로 보냅니다.",
+    steps: [
+      VERIFY_STEP,
+      { ...ORDER_STEP, label: "주문 내용 확인" },
+      PAY_REQUEST_STEP,
+      {
+        id: "eligible",
+        label: "주문·입금 정보 확인",
+        hint: "결제 수단(무통장 입금), 입금 대기 상태, 주문 수량, 입금 은행을 확인하세요.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
+      },
+      {
+        id: "fix",
+        label: "주문 수량 정정",
+        hint: "고객이 확인한 수량으로 주문을 정정하세요.",
+        target: "하단 · 주문 수량 정정",
+        doneWhen: { type: "action", ids: ["order_fix"] },
+      },
+      {
+        id: "amount",
+        label: "입금 금액·기한 안내",
+        hint: "정정된 금액과 입금 기한(주문 후 24시간)을 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "deposit_amount" },
+      },
+      {
+        id: "sms",
+        label: "입금 계좌 문자 발송",
+        hint: "고객이 원하는 은행의 입금 계좌를 문자로 보냅니다.",
+        target: "하단 · 입금 계좌 문자 발송",
+        doneWhen: { type: "action", ids: ["deposit_sms"] },
+      },
+      {
+        id: "after",
+        label: "입금 후 진행 안내",
+        hint: "입금이 확인되면 출고된다고 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "deposit_after" },
+      },
+    ],
+    notices: [
+      {
+        id: "deposit_amount",
+        label: "입금 금액·기한",
+        script: "입금하실 금액과 계좌를 문자로 보내드립니다. 주문 후 24시간 안에 입금하지 않으시면 주문이 자동 취소됩니다.",
+        policyId: "p-payment",
+        requiredFor: ["deposit_sms"],
+      },
+      {
+        id: "deposit_after",
+        label: "입금 후 진행",
+        script: "입금이 확인되면 바로 출고 준비를 시작하고, 출고되면 문자로 안내해 드리겠습니다.",
+        policyId: "p-payment",
+      },
+    ],
+    actions: ["order_fix", "deposit_sms"],
+    policies: ["p-payment"],
+  },
   method_change: {
     ...PLAYBOOKS.payment,
     title: FLOW_LABEL.method_change,
@@ -704,6 +830,13 @@ export const ALL_PLAYBOOKS: Playbook[] = [
 
 const HANDOFF_ACTIONS: ActionId[] = ["transfer", "callback"];
 
+/** 고객이 확인한 수량이 접수된 수량과 달라 정정이 필요하거나, 이미 정정했는지 */
+function depositNeedsFix(session: Session, order?: Order): boolean {
+  if (session.actions.some((a) => a.actionId === "order_fix")) return true;
+  const qty = session.request?.confirmedQty;
+  return !!order && !!qty && qty !== order.qty;
+}
+
 /**
  * 접수 없이 끝내는 분기.
  * denied = 처리 불가 판단, handoff = 추가 확인이 필요한 채로 이관·콜백함. 이미 접수했으면 undefined.
@@ -733,7 +866,13 @@ export function playbookFor(session: Session, order?: Order): Playbook {
             }
           : flowBase;
       const closure = requestClosure(session, order);
-      if (!closure) return base;
+      if (!closure) {
+        // 입금 계좌 안내에서 수량 정정이 필요 없으면 정정 단계와 버튼을 뺍니다.
+        if (flow === "deposit" && !depositNeedsFix(session, order)) {
+          return { ...base, steps: base.steps.filter((st) => st.id !== "fix"), actions: ["deposit_sms"] };
+        }
+        return base;
+      }
       // 접수할 수 없는 분기에서는 접수·비용 안내 단계 대신 종료 조건(불가 사유·대안·이관)을 둡니다.
       const a = assessRequest(session, order);
       const upToCheck = base.steps.slice(0, base.steps.findIndex((st) => st.id === "eligible") + 1).map((st) =>
@@ -897,6 +1036,39 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
     description: "출고 전 주문의 기존 결제를 취소하고 새 결제 수단으로 재결제를 요청합니다.",
     followup: "고객 재결제 완료 여부 확인",
   },
+  return_refuse: {
+    id: "return_refuse",
+    label: "반품(수취 거부) 접수",
+    icon: "Truck",
+    consent: true,
+    receiptPrefix: "RT",
+    orderStatus: "반품 접수",
+    fields: [
+      { id: "reason", label: "반품 사유", type: "select", options: ["단순 변심", "상품 불량", "오배송"], defaultValue: "단순 변심" },
+    ],
+    description: "배송 중인 주문을 반품으로 접수합니다. 고객이 수취 거부하면 반송 상품 입고 후 환불됩니다.",
+    followup: "반송 상품 입고 확인 후 환불 처리 확인",
+  },
+  order_fix: {
+    id: "order_fix",
+    label: "주문 수량 정정",
+    icon: "Edit3",
+    consent: true,
+    receiptPrefix: "OC",
+    fields: [{ id: "qty", label: "정정 수량", type: "text", placeholder: "예: 1" }],
+    description: "고객이 확인한 수량으로 주문을 다시 접수하고 입금 금액을 정정합니다.",
+    followup: "정정된 주문 금액으로 입금 확인",
+  },
+  deposit_sms: {
+    id: "deposit_sms",
+    label: "입금 계좌 문자 발송",
+    icon: "Send",
+    consent: false,
+    receiptPrefix: "SMS",
+    fields: [{ id: "bank", label: "입금 은행", type: "select", options: DEPOSIT_BANKS, defaultValue: DEPOSIT_BANKS[0] }],
+    description: "등록된 휴대폰 번호로 입금 계좌·금액·기한을 문자로 보냅니다.",
+    followup: "고객 입금 확인 후 출고",
+  },
   carrier_check: {
     id: "carrier_check",
     label: "택배사 확인 요청",
@@ -981,10 +1153,22 @@ export function actionBlockedReason(actionId: ActionId, session: Session, order?
   // 담당자 이관·콜백은 고객 정보를 바꾸지 않아 본인 확인 전에도 쓸 수 있습니다.
   if (!session.verified && actionId !== "transfer" && actionId !== "callback") return "본인 확인 후 사용할 수 있습니다.";
   const done = (id: ActionId) => session.actions.some((a) => a.actionId === id);
-  const needsOrder: ActionId[] = ["tracking", "return_pickup", "exchange", "refund", "reship", "payment_cancel", "payment_change", "as"];
+  const needsOrder: ActionId[] = [
+    "tracking",
+    "return_pickup",
+    "return_refuse",
+    "exchange",
+    "refund",
+    "reship",
+    "payment_cancel",
+    "payment_change",
+    "order_fix",
+    "deposit_sms",
+    "as",
+  ];
   if (needsOrder.includes(actionId) && !order) return "관련 주문을 먼저 선택하세요.";
   // 환불/교환·결제 상담은 요청 구분과 처리 조건 판단이 끝나야 접수할 수 있습니다.
-  const submitActions: ActionId[] = ["return_pickup", "exchange", "payment_cancel", "payment_change"];
+  const submitActions: ActionId[] = ["return_pickup", "return_refuse", "exchange", "payment_cancel", "payment_change", "deposit_sms"];
   if (hasRequestFlow(session.category) && [...submitActions, "refund"].includes(actionId)) {
     if (!session.request?.kind) return session.category === "payment" ? "결제 요청 구분을 먼저 선택하세요." : "환불·교환 요청 구분을 먼저 선택하세요.";
     if (submitActions.includes(actionId) && !done(actionId)) {
@@ -1013,6 +1197,18 @@ export function actionBlockedReason(actionId: ActionId, session: Session, order?
     case "payment_cancel":
       if (done("payment_cancel")) return "이미 결제 취소가 접수되었습니다.";
       return order?.status === "결제 완료" ? undefined : "출고 후 주문은 반품 절차로 진행하세요.";
+    case "return_refuse":
+      if (done("return_refuse")) return "이미 반품이 접수되었습니다.";
+      return order?.status === "배송 중" ? undefined : "배송 중인 주문만 수취 거부 반품으로 접수할 수 있습니다.";
+    case "order_fix": {
+      if (done("order_fix")) return "이미 주문 수량을 정정했습니다.";
+      const qty = session.request?.confirmedQty;
+      if (!qty) return "고객이 확인한 주문 수량을 먼저 선택하세요.";
+      return order && qty !== order.qty ? undefined : "주문 수량이 고객 확인 수량과 같아 정정할 필요가 없습니다.";
+    }
+    case "deposit_sms":
+      if (done("deposit_sms")) return "이미 입금 계좌 문자를 보냈습니다.";
+      return depositNeedsFix(session, order) && !done("order_fix") ? "주문 수량 정정을 먼저 접수하세요." : undefined;
     case "payment_change":
       if (done("payment_change")) return "이미 결제 수단 변경이 접수되었습니다.";
       return order?.status === "결제 완료" ? undefined : "출고 후 주문은 결제 수단을 바꿀 수 없습니다.";
@@ -1031,7 +1227,7 @@ export function suggestOrder(category: CategoryId | undefined, orders: Order[]):
     case "shipping":
       return first((o) => o.status === "배송 중") ?? sorted[0];
     case "payment":
-      return first((o) => o.status === "결제 완료") ?? sorted[0];
+      return first((o) => o.status === "결제 완료" || o.status === "입금 대기") ?? sorted[0];
     case "product_inquiry":
       return first((o) => o.status === "구매 확정" || o.status === "배송 완료") ?? sorted[0];
     default:
@@ -1074,16 +1270,34 @@ export function briefingChecks(
       items.push(
         order?.deliveredAt
           ? { id: "delivered", label: "배송 완료일 확인", hint: `${fmtDate(order.deliveredAt)} 배송 완료`, status: "done", statusLabel: "자동 확인" }
-          : { id: "delivered", label: "배송 완료일 확인", hint: "아직 배송 완료 전입니다.", status: "warning", statusLabel: "배송 전" },
+          : order?.status === "배송 중"
+            ? {
+                id: "delivered",
+                label: "배송 상태",
+                hint: "출고 후 배송 중 · 즉시 취소 불가, 반품 접수 후 수취 거부로 진행",
+                status: "warning",
+                statusLabel: "배송 중",
+              }
+            : { id: "delivered", label: "배송 완료일 확인", hint: "아직 배송 완료 전입니다.", status: "warning", statusLabel: "배송 전" },
       );
-      if (left !== undefined && deadline) {
+      if (order?.openAs) {
+        items.push({
+          id: "as",
+          label: "진행 중 AS",
+          hint: `${order.openAs.receiptNo} · ${order.openAs.symptom} · AS 취소 후 교환할지 확인`,
+          status: "warning",
+          statusLabel: "확인 필요",
+        });
+      }
+      if (left !== undefined && deadline && order) {
         // 기간은 조건 중 하나일 뿐이라 '반품 가능'으로 확정하지 않습니다.
+        const window = order.returnPolicy?.defectWindowDays ?? 30;
         items.push({
           id: "period",
           label: "반품·교환 기간 (단순 변심 7일 기준)",
           hint:
             left < 0
-              ? `${fmtDate(deadline)} 경과 · 불량·오배송이면 수령 후 30일까지 가능`
+              ? `${fmtDate(deadline)} 경과 · 불량·오배송이면 수령 후 ${window >= 365 ? "1년(품질보증 기간)" : `${window}일`}까지 가능`
               : `${fmtDate(deadline)}까지 · 기간 조건만 충족, 다른 조건은 통화 중 확인`,
           status: left <= 1 ? "warning" : "done",
           statusLabel: left < 0 ? "단순 변심 기간 경과" : left === 0 ? "오늘까지" : `D-${left}`,
@@ -1147,12 +1361,27 @@ export function briefingChecks(
           statusLabel: "자동 확인",
         });
         items.push(
-          order.status === "결제 완료"
-            ? { id: "ship", label: "출고 여부", hint: "출고 전 · 즉시 결제 취소 가능", status: "done", statusLabel: "출고 전" }
-            : { id: "ship", label: "출고 여부", hint: `${order.status} · 결제 취소 대신 반품 절차`, status: "warning", statusLabel: "출고 후" },
+          order.status === "입금 대기"
+            ? { id: "ship", label: "입금 상태", hint: "무통장 입금 대기 · 입금 계좌 재안내 가능", status: "warning", statusLabel: "입금 대기" }
+            : order.status === "결제 완료"
+              ? { id: "ship", label: "출고 여부", hint: "출고 전 · 즉시 결제 취소 가능", status: "done", statusLabel: "출고 전" }
+              : { id: "ship", label: "출고 여부", hint: `${order.status} · 결제 취소 대신 반품 절차`, status: "warning", statusLabel: "출고 후" },
         );
+        if (order.status === "입금 대기") {
+          items.push({
+            id: "qty",
+            label: "주문 수량·금액 확인",
+            hint: `접수 ${order.qty}${order.unit ?? "개"} · ${fmtWon(order.price)} · 고객이 주문한 수량과 같은지 확인`,
+            status: "todo",
+            statusLabel: "통화 중 확인",
+          });
+        }
       }
-      items.push({ id: "rule", label: "결제 취소 기준 안내", hint: "카드사 반영 3~5영업일", status: "todo", statusLabel: "필수 안내" });
+      items.push(
+        order?.status === "입금 대기"
+          ? { id: "rule", label: "입금 금액·기한 안내", hint: "주문 후 24시간 내 미입금 시 자동 취소", status: "todo", statusLabel: "필수 안내" }
+          : { id: "rule", label: "결제 취소 기준 안내", hint: "카드사 반영 3~5영업일", status: "todo", statusLabel: "필수 안내" },
+      );
       break;
     }
     case "product_inquiry": {

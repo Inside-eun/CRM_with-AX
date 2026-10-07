@@ -3,8 +3,9 @@
 import { isoDaysAgo } from "./format";
 import type { CrmState, Customer, HistoryRecord, Order, QueueItem } from "./types";
 
-// 주문에 상품별 반품 정책·교환 옵션을 추가하면서 2로 올렸습니다. 이전 저장본은 새 목 데이터로 바뀝니다.
-export const STATE_VERSION = 2;
+// 주문에 상품별 반품 정책·교환 옵션을 추가하면서 2, 데모 녹음에 맞춘 주문·AS 이력을 추가하면서 3으로 올렸습니다.
+// 이전 저장본은 새 목 데이터로 바뀝니다.
+export const STATE_VERSION = 3;
 
 function orderNo(iso: string, seq: string) {
   const d = new Date(iso);
@@ -104,7 +105,33 @@ export function createSeed(now = new Date()): CrmState {
     },
   ];
 
+  // 데모 녹음 ②의 '6월에 주문한' 세정기. 7월 이후면 올해 6월, 아니면 작년 6월로 둡니다.
+  const juneYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+  const juneOrderedAt = new Date(juneYear, 5, 20, 10, 15).toISOString();
+  const juneDeliveredAt = new Date(juneYear, 5, 22, 13, 40).toISOString();
+
   const orders: Order[] = [
+    // 데모 녹음 ① — 출고 후 배송 중이라 즉시 취소 대신 반품(수취 거부)으로 진행하는 주문
+    {
+      no: orderNo(ago(7), "031190"),
+      customerId: "C-10231",
+      orderedAt: ago(7, 21, 10),
+      item: "스포츠 롱 벤치코트",
+      option: "블랙 / 90",
+      qty: 1,
+      price: 129000,
+      payMethod: "현대카드 1127 일시불",
+      approvalNo: "30931822",
+      status: "배송 중",
+      carrier: "CJ대한통운",
+      invoice: "6892-0019-2045",
+      shippedAt: ago(1, 15, 30),
+      tracking: [
+        { title: "간선 상차", at: ago(0, 4, 20), desc: "곤지암 허브" },
+        { title: "집화 완료", at: ago(1, 15, 30), desc: "이천 물류센터" },
+      ],
+      returnPolicy: { simpleChange: true, note: "의류 · 수령 전이면 수취 거부로 반품 · 착용 흔적이 있으면 단순 변심 반품 불가" },
+    },
     // 박서연 — 문의 유형별로 관련 주문이 하나씩 있도록 구성
     {
       no: orderNo(ago(9), "004521"),
@@ -252,6 +279,21 @@ export function createSeed(now = new Date()): CrmState {
       status: "결제 완료",
       returnPolicy: { simpleChange: true, note: "잡화 · 미사용이면 반품 가능" },
     },
+    // 정하은 — 데모 녹음 ③: 무통장 입금 계좌 문자를 못 받았고, 수량이 2세트로 잘못 접수된 주문
+    {
+      no: orderNo(ago(0), "026604"),
+      customerId: "C-00982",
+      orderedAt: ago(0, 9, 40),
+      item: "영광 모시떡",
+      option: "30개입",
+      qty: 2,
+      unit: "세트",
+      price: 79800,
+      payMethod: "무통장 입금 (신한은행)",
+      approvalNo: "입금 전",
+      status: "입금 대기",
+      returnPolicy: { simpleChange: false, note: "식품 · 출고 전 취소만 가능 · 단순 변심 반품 불가" },
+    },
     // 최민준
     {
       no: orderNo(ago(74), "003345"),
@@ -270,7 +312,30 @@ export function createSeed(now = new Date()): CrmState {
       deliveredAt: ago(71, 12),
       returnPolicy: { simpleChange: true, note: "소형 가전 · 사용 흔적이 있으면 단순 변심 반품 불가" },
     },
-    // 한지우
+    // 한지우 — 데모 녹음 ②: 작동이 됐다 안 됐다 하는 구강 세정기, AS 접수 상태에서 교환 요청
+    {
+      no: orderNo(juneOrderedAt, "044318"),
+      customerId: "C-18820",
+      orderedAt: juneOrderedAt,
+      item: "동복제약 벤트릭스 구강 세정기",
+      option: "단일 옵션",
+      qty: 1,
+      price: 89000,
+      payMethod: "토스페이",
+      approvalNo: "TS-40188214",
+      status: "구매 확정",
+      carrier: "CJ대한통운",
+      invoice: "6892-0004-7713",
+      shippedAt: new Date(juneYear, 5, 21, 16).toISOString(),
+      deliveredAt: juneDeliveredAt,
+      openAs: { receiptNo: "AS-48213", at: ago(3, 11, 5), symptom: "전원이 켜졌다 꺼졌다 하며 작동이 불안정함" },
+      returnPolicy: {
+        simpleChange: false,
+        defectWindowDays: 365,
+        note: "소형 가전 · 개봉 후 단순 변심 반품·교환 불가 · 제품 하자는 수령 후 1년(품질보증 기간) 내 교환 또는 AS",
+      },
+      exchangeOptions: [{ label: "동일 상품 (새 제품)", stock: 6, price: 89000 }],
+    },
     {
       no: orderNo(ago(4), "012287"),
       customerId: "C-18820",
@@ -303,7 +368,34 @@ export function createSeed(now = new Date()): CrmState {
     { id: "Q-2295", customerId: "C-18820", waitSeconds: 48, urgency: "low", arsMenu: "교환·반품" },
   ];
 
+  const ventrix = orders.find((o) => o.item === "동복제약 벤트릭스 구강 세정기")!;
+
   const history: HistoryRecord[] = [
+    seedRecord({
+      id: "H-AS-48213",
+      customerId: "C-18820",
+      startedAt: ago(3, 11, 0),
+      durationSec: 276,
+      agent: "정유진",
+      category: "product_inquiry",
+      tags: ["제품 하자"],
+      summary: {
+        request: "구강 세정기가 작동이 됐다 안 됐다 한다며 점검을 요청했습니다.",
+        told: "품질보증 기간 내 무상 AS 대상이며 회수 후 점검 결과를 안내한다고 했습니다.",
+        result: "AS를 접수했습니다 (AS-48213).",
+      },
+      actions: [
+        {
+          id: "A-seed-5",
+          actionId: "as",
+          label: "AS 접수",
+          receiptNo: "AS-48213",
+          at: ago(3, 11, 5),
+          orderNo: ventrix.no,
+          detail: "증상 전원이 켜졌다 꺼졌다 하며 작동이 불안정함",
+        },
+      ],
+    }),
     seedRecord({
       id: "H-0820-1",
       customerId: "C-10231",

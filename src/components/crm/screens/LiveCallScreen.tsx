@@ -66,6 +66,7 @@ import {
   type StepState,
 } from "@/lib/crm/playbooks";
 import {
+  DEPOSIT_BANKS,
   FLOW_LABEL,
   HANDOFF_HINT,
   REQUEST_KINDS,
@@ -76,8 +77,10 @@ import {
   hasRequestFlow,
   isDefectReason,
   payChangeOptions,
+  defectWindow,
   requestFlow,
   returnDeadlineFor,
+  unitOf,
   type Basis,
   type RequestFlow,
   type Verdict,
@@ -485,7 +488,8 @@ function TargetOrderCard({
     >
       <div className="text-[15px] font-semibold leading-[22px] text-gray-900">{order.item}</div>
       <div className="mb-3 text-[13px] text-gray-500">
-        {order.option} · {order.qty}개 · {fmtWon(order.price)}
+        {order.option} · {order.qty}
+        {unitOf(order)} · {fmtWon(order.price)}
       </div>
       <div className="grid grid-cols-2 gap-2">
         <Fact label="주문 상태" value={order.status} highlight={currentStepId === "status" || currentStepId === "tracking"} />
@@ -498,7 +502,7 @@ function TargetOrderCard({
         ) : (
         <Fact
           wide
-          label={`반품 기한 · ${reason && reason !== "단순 변심" ? "불량·오배송 30일" : "단순 변심 7일"}`}
+          label={`반품 기한 · ${reason && reason !== "단순 변심" ? `불량·오배송 ${defectWindow(order)}일` : "단순 변심 7일"}`}
           value={
             deadline && left !== undefined
               ? `${fmtDate(deadline)} (${left < 0 ? "기간 경과" : left === 0 ? "오늘까지" : `D-${left}`})`
@@ -509,6 +513,12 @@ function TargetOrderCard({
         />
         )}
       </div>
+      {order.openAs && (
+        <div className="mt-2 flex items-start gap-1.5 rounded-md bg-(--warning-50) px-2.5 py-1.5 text-xs text-warning-700">
+          <Icon name="Tool" size={14} className="mt-0.5 flex-none" />
+          진행 중 AS {order.openAs.receiptNo} · {fmtDate(order.openAs.at)} 접수 · {order.openAs.symptom}
+        </div>
+      )}
       {isReturnCase && order.returnPolicy && (
         <div className="mt-2 text-xs text-gray-600">
           <Icon name="BookOpen" size={12} className="mr-1 inline align-[-1px] text-gray-400" />
@@ -683,6 +693,7 @@ function RequestPanel({
   const flow = a.flow;
   const locked = !!a.submitted;
   const showReturnInputs = (flow === "return" || flow === "exchange") && !!order?.deliveredAt;
+  const unit = order ? unitOf(order) : "개";
   const issues = a.basis.filter((b) => b.verdict !== "ok");
   const isPayment = session.category === "payment";
   const kinds = REQUEST_KINDS[session.category!] ?? [];
@@ -691,6 +702,8 @@ function RequestPanel({
     return: "회수·검수 후 환불",
     exchange: "회수·검수 후 교환 상품 출고",
     method_change: "기존 결제 취소 후 재결제",
+    refuse: "수취 거부 → 반송 입고 확인 후 환불",
+    deposit: "주문 확인 후 입금 계좌 문자 발송",
   };
 
   return (
@@ -730,6 +743,42 @@ function RequestPanel({
               onChange={(e) => updateRequest({ newPayMethod: e.target.value || undefined })}
             />
           )}
+          {flow === "refuse" && (
+            <CrmSelect
+              size="sm"
+              label="취소·반품 사유"
+              placeholder="미확인"
+              disabled={locked}
+              value={req.reason ?? ""}
+              options={RETURN_REASONS}
+              onChange={(e) => updateRequest({ reason: (e.target.value || undefined) as ReturnReason | undefined })}
+            />
+          )}
+          {flow === "deposit" && order && (
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
+              <CrmSelect
+                size="sm"
+                label="고객이 주문한 수량"
+                placeholder="미확인"
+                disabled={locked || session.actions.some((x) => x.actionId === "order_fix")}
+                value={req.confirmedQty ? String(req.confirmedQty) : ""}
+                options={Array.from({ length: Math.max(order.qty, 1) }, (_, i) => i + 1).map((q) => ({
+                  value: String(q),
+                  label: `${q}${unit} · ${fmtWon(Math.round(order.price / order.qty) * q)}${q === order.qty ? " (현재 접수)" : ""}`,
+                }))}
+                onChange={(e) => updateRequest({ confirmedQty: e.target.value ? Number(e.target.value) : undefined })}
+              />
+              <CrmSelect
+                size="sm"
+                label="입금 은행"
+                placeholder="미확인"
+                disabled={locked}
+                value={req.depositBank ?? ""}
+                options={DEPOSIT_BANKS}
+                onChange={(e) => updateRequest({ depositBank: e.target.value || undefined })}
+              />
+            </div>
+          )}
           {showReturnInputs && (
             <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
               <CrmSelect
@@ -741,7 +790,21 @@ function RequestPanel({
                 options={RETURN_REASONS}
                 onChange={(e) => updateRequest({ reason: (e.target.value || undefined) as ReturnReason | undefined })}
               />
-              {isDefectReason(req.reason) ? (
+              {order?.openAs && (
+                <CrmSelect
+                  size="sm"
+                  label={`진행 중 AS (${order.openAs.receiptNo})`}
+                  placeholder="미확인"
+                  disabled={locked}
+                  value={req.asDecision ?? ""}
+                  options={[
+                    { value: "cancel_as", label: "AS 취소 후 진행" },
+                    { value: "keep_as", label: "AS 유지 (접수 안 함)" },
+                  ]}
+                  onChange={(e) => updateRequest({ asDecision: (e.target.value || undefined) as "cancel_as" | "keep_as" | undefined })}
+                />
+              )}
+              {isDefectReason(req.reason) && order?.openAs ? null : isDefectReason(req.reason) ? (
                 <CrmSelect
                   size="sm"
                   label="불량·오배송 사진"
@@ -905,6 +968,20 @@ function RequestProgress({ session, flow }: { session: Session; flow: RequestFlo
               : { id: "r3", label: "환불 요청", hint: "하단 '환불 요청'으로 접수", status: "current" as const, statusLabel: "요청 전" },
             { id: "r4", label: "환불 완료", hint: "검수 후 결제 수단으로 환불", status: "todo" as const, statusLabel: "미완료" },
           ]
+        : flow === "refuse"
+          ? [
+              { id: "f1", label: "반품(수취 거부) 접수", ...received(find("return_refuse")) },
+              { id: "f2", label: "고객 수취 거부 · 반송", hint: "배송 기사 연락 시 반송 요청", status: "todo" as const, statusLabel: "예정" },
+              { id: "f3", label: "반송 상품 입고 확인", hint: "물류센터 입고 후 검수", status: "todo" as const, statusLabel: "예정" },
+              { id: "f4", label: "환불 완료", hint: "입고 확인 후 평일 3~4일", status: "todo" as const, statusLabel: "미완료" },
+            ]
+        : flow === "deposit"
+          ? [
+              ...(find("order_fix") ? [{ id: "d0", label: "주문 수량 정정", ...received(find("order_fix")) }] : []),
+              { id: "d1", label: "입금 계좌 문자 발송", ...received(find("deposit_sms")) },
+              { id: "d2", label: "고객 입금", hint: "주문 후 24시간 내 · 미입금 시 자동 취소", status: "todo" as const, statusLabel: "미완료" },
+              { id: "d3", label: "입금 확인 · 출고", hint: "출고 시 문자 안내", status: "todo" as const, statusLabel: "예정" },
+            ]
         : flow === "method_change"
           ? [
               { id: "m1", label: "결제 수단 변경 접수", ...received(find("payment_change")) },

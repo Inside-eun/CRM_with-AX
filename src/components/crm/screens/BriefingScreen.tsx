@@ -540,7 +540,8 @@ function OrderCard({
             <div>
               <div className="text-sm font-semibold">{order.item}</div>
               <div className="text-[13px] text-gray-500">
-                {order.option} · {order.qty}개 · {fmtWon(order.price)}
+                {order.option} · {order.qty}
+                {order.unit ?? "개"} · {fmtWon(order.price)}
               </div>
             </div>
           </div>

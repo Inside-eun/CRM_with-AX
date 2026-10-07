@@ -39,6 +39,9 @@ function defaultValues(actionId: ActionId, linked: Record<string, string | undef
 /** 상담 화면의 환불·교환 요청에서 이미 확인한 값. 대화상자에서 다시 고르지 않습니다. */
 function linkedValues(actionId: ActionId, session: Session): Record<string, string | undefined> {
   if (actionId === "payment_change") return { method: session.request?.newPayMethod };
+  if (actionId === "order_fix") return { qty: session.request?.confirmedQty ? String(session.request.confirmedQty) : undefined };
+  if (actionId === "deposit_sms") return { bank: session.request?.depositBank };
+  if (actionId === "return_refuse") return { reason: session.request?.reason };
   if (session.category !== "refund_exchange") return {};
   if (actionId === "return_pickup") return { reason: session.request?.reason };
   if (actionId === "exchange") return { option: session.request?.exchangeOption };
@@ -85,7 +88,7 @@ export function ActionDialog({
         ? Math.abs(exchangePriceDiff(order, values.option) ?? 0)
         : actionId === "refund"
           ? refundAmount(session, order.price)
-          : actionId === "return_pickup"
+          : actionId === "return_pickup" || actionId === "return_refuse"
             ? order.price - (simpleChange ? RETURN_SHIPPING_FEE : 0)
             : order.price;
   const conditionOk =
@@ -161,6 +164,9 @@ export function ActionDialog({
       const diff = order ? exchangePriceDiff(order, linked.option) : undefined;
       const reason = session.request?.reason;
       if (opt) context.push({ label: "교환 옵션", value: `${opt.label} · 재고 ${opt.stock}개` });
+      if (order?.openAs && session.request?.asDecision === "cancel_as") {
+        context.push({ label: "기존 AS", value: `${order.openAs.receiptNo} 취소 후 교환 (고객 요청)` });
+      }
       context.push(
         { label: "회수지", value: `${customer.address} (기본 배송지)` },
         {
@@ -187,6 +193,41 @@ export function ActionDialog({
           { label: "예상 환불액", value: fmtWon(refundAmount(session, order.price)), highlight: true },
           { label: "환불 수단", value: order.payMethod },
           { label: "예상 일정", value: "회수 상품 검수 후 3~5영업일 (요청 접수 ≠ 환불 완료)" },
+        );
+      }
+      break;
+    case "return_refuse":
+      if (linked.reason) context.push({ label: "반품 사유", value: linked.reason });
+      context.push(
+        { label: "반품 방식", value: "수취 거부 · 배송 기사에게 반송 요청" },
+        {
+          label: "반품 배송비",
+          value: simpleChange ? `왕복 ${fmtWon(RETURN_SHIPPING_FEE)} · 고객 부담 (환불액에서 차감)` : "회사 부담 (불량·오배송)",
+        },
+      );
+      if (order) {
+        context.push(
+          { label: "예상 환불액", value: `${fmtWon(order.price - (simpleChange ? RETURN_SHIPPING_FEE : 0))} · 입고 확인 후 확정`, highlight: true },
+          { label: "예상 일정", value: "반송 상품 입고 확인 후 평일 3~4일 내 환불" },
+        );
+      }
+      break;
+    case "order_fix":
+      if (order && linked.qty) {
+        const unit = order.unit ?? "개";
+        context.push(
+          { label: "수량 정정", value: `${order.qty}${unit} → ${linked.qty}${unit}`, highlight: true },
+          { label: "입금 금액", value: `${fmtWon(order.price)} → ${fmtWon(Math.round(order.price / order.qty) * Number(linked.qty))}` },
+        );
+      }
+      break;
+    case "deposit_sms":
+      if (order) {
+        context.push(
+          { label: "받는 번호", value: session.verified ? customer.phone : "등록된 휴대폰 번호" },
+          { label: "입금 은행", value: linked.bank ?? "미확인", highlight: true },
+          { label: "입금 금액", value: fmtWon(order.price) },
+          { label: "입금 기한", value: "주문 후 24시간 · 미입금 시 자동 취소" },
         );
       }
       break;

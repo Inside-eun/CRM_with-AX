@@ -19,9 +19,9 @@ npm run dev
 
 | 시나리오 | 파일 경로 | 연결 데이터 |
 | --- | --- | --- |
-| ① 주문 취소·반품 요청 | `public/demo-audio/01-cancel-return.m4a` | 박서연 · 린넨 셔츠 원피스 (배송 완료) |
-| ② 제품 교환 요청 | `public/demo-audio/02-exchange.m4a` | 한지우 · 오버핏 후드티 (교환 옵션·재고) |
-| ③ 결제 수단 변경 요청 | `public/demo-audio/03-payment-change.m4a` | 정하은 · 가죽 카드지갑 (결제 완료·출고 전) |
+| ① 주문 취소·반품 요청 | `public/demo-audio/01-cancel-return.m4a` | 박서연 · 스포츠 롱 벤치코트 (배송 중 → 반품·수취 거부) |
+| ② 제품 교환 요청 | `public/demo-audio/02-exchange.m4a` | 한지우 · 구강 세정기 (6월 구매·AS 진행 중 → AS 취소 후 불량 교환) |
+| ③ 무통장 입금 계좌 안내 요청 | `public/demo-audio/03-deposit-account.m4a` | 정하은 · 영광 모시떡 (입금 대기·2세트 → 1세트 정정 후 계좌 문자) |
 
 ```bash
 npm run dev                                  # 다른 터미널에서 실행해 둔 상태로

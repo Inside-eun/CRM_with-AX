@@ -25,6 +25,7 @@ export type Customer = {
 };
 
 export type OrderStatus =
+  | "입금 대기"
   | "결제 완료"
   | "배송 중"
   | "배송 완료"
@@ -42,6 +43,8 @@ export type TrackingEvent = { title: string; at: string; desc?: string };
 export type ProductReturnPolicy = {
   /** 단순 변심 반품·교환 허용 여부 (불량·오배송은 기간 내 항상 가능) */
   simpleChange: boolean;
+  /** 불량·오배송 반품·교환 가능 기간(수령 후 일수). 없으면 기본 30일. 가전 등 품질보증 기간이 긴 상품에 씁니다. */
+  defectWindowDays?: number;
   note: string;
 };
 
@@ -64,6 +67,10 @@ export type Order = {
   shippedAt?: string;
   deliveredAt?: string;
   tracking?: TrackingEvent[];
+  /** 수량 단위 (예: 세트). 없으면 '개' */
+  unit?: string;
+  /** 이 주문에 진행 중인 AS 접수 */
+  openAs?: { receiptNo: string; at: string; symptom: string };
   returnPolicy?: ProductReturnPolicy;
   exchangeOptions?: ExchangeOption[];
 };
@@ -81,7 +88,7 @@ export type QueueItem = {
 };
 
 /** 데모 음성 시나리오 id (src/lib/crm/demo-scenarios.ts) */
-export type DemoScenarioId = "cancel_return" | "exchange" | "payment_change";
+export type DemoScenarioId = "cancel_return" | "exchange" | "deposit_info";
 
 /**
  * 접수 음성의 화자 구성.
@@ -117,6 +124,9 @@ export type ActionId =
   | "reship"
   | "payment_cancel"
   | "payment_change"
+  | "return_refuse"
+  | "order_fix"
+  | "deposit_sms"
   | "as"
   | "voc"
   | "transfer"
@@ -137,13 +147,19 @@ export type PerformedAction = {
 export type ReturnReason = "단순 변심" | "상품 불량" | "오배송";
 
 /** 요청 구분. 환불/교환 상담은 refund·exchange, 결제 상담은 cancel·method_change */
-export type RequestKind = "refund" | "exchange" | "cancel" | "method_change";
+export type RequestKind = "refund" | "exchange" | "cancel" | "method_change" | "deposit_info";
 
 /** 환불/교환·결제 상담에서 상담사가 고객에게 확인한 값. 비어 있으면 아직 확인하지 않은 것입니다. */
 export type ReturnRequest = {
   kind?: RequestKind;
   /** 결제 수단 변경 시 고객이 원하는 새 결제 수단 */
   newPayMethod?: string;
+  /** 진행 중 AS가 있을 때 고객 선택: AS 취소 후 진행 / AS 유지 */
+  asDecision?: "cancel_as" | "keep_as";
+  /** 입금 계좌 안내: 고객이 확인해 준 주문 수량 */
+  confirmedQty?: number;
+  /** 입금 계좌 안내: 고객이 원하는 입금 은행 */
+  depositBank?: string;
   reason?: ReturnReason;
   /** 상품 사용·훼손 여부 */
   condition?: "intact" | "damaged";
