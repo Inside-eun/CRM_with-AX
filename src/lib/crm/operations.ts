@@ -4,7 +4,7 @@
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import type { ClassifyResult } from "@/lib/useVoiceClassify";
 import { RETURN_SHIPPING_FEE, fmtShortDate, fmtWon, isoDaysAgo, receiptNo, toDateInput, uid } from "./format";
-import { ACTIONS, PLAYBOOKS, suggestOrder } from "./playbooks";
+import { ACTIONS, ALL_PLAYBOOKS, suggestOrder } from "./playbooks";
 import { readCrm, updateCrm } from "./store";
 import type {
   ActionId,
@@ -15,6 +15,7 @@ import type {
   HistoryRecord,
   Intake,
   PerformedAction,
+  ReturnRequest,
   Session,
   SummaryFields,
   WrapUp,
@@ -26,7 +27,7 @@ export const LOW_CONFIDENCE = 0.65;
 export const categoryLabel = (id: CategoryId) => CATEGORIES.find((c) => c.id === id)?.label ?? id;
 
 export function noticeLabel(id: string): string {
-  for (const pb of Object.values(PLAYBOOKS)) {
+  for (const pb of ALL_PLAYBOOKS) {
     const n = pb.notices.find((x) => x.id === id);
     if (n) return n.label;
   }
@@ -163,6 +164,11 @@ export function toggleStep(id: string) {
     ...s,
     stepsDone: s.stepsDone.includes(id) ? s.stepsDone.filter((x) => x !== id) : [...s.stepsDone, id],
   }));
+}
+
+/** 환불/교환 요청 구분·조건 확인 값을 바꿉니다. undefined 값은 '미확인'으로 되돌립니다. */
+export function updateRequest(patch: Partial<ReturnRequest>) {
+  updateSession((s) => ({ ...s, request: { ...s.request, ...patch } }));
 }
 
 export function setMemo(memo: string) {

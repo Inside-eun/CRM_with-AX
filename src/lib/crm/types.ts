@@ -37,6 +37,16 @@ export type OrderStatus =
 
 export type TrackingEvent = { title: string; at: string; desc?: string };
 
+/** 상품별 반품·교환 정책. 주문에 없으면 상담사가 매뉴얼에서 확인해야 합니다. */
+export type ProductReturnPolicy = {
+  /** 단순 변심 반품·교환 허용 여부 (불량·오배송은 기간 내 항상 가능) */
+  simpleChange: boolean;
+  note: string;
+};
+
+/** 교환 가능한 옵션과 재고·판매가(1개 기준) */
+export type ExchangeOption = { label: string; stock: number; price: number };
+
 export type Order = {
   no: string;
   customerId: string;
@@ -53,6 +63,8 @@ export type Order = {
   shippedAt?: string;
   deliveredAt?: string;
   tracking?: TrackingEvent[];
+  returnPolicy?: ProductReturnPolicy;
+  exchangeOptions?: ExchangeOption[];
 };
 
 export type Urgency = "high" | "mid" | "low";
@@ -98,6 +110,20 @@ export type PerformedAction = {
   /** 확정 시 입력값 요약 (예: "반품 사유 단순 변심 · 회수 방문 예정일 10.01") */
   detail?: string;
   values?: Record<string, string>;
+};
+
+export type ReturnReason = "단순 변심" | "상품 불량" | "오배송";
+
+/** 환불/교환 상담에서 상담사가 고객에게 확인한 값. 비어 있으면 아직 확인하지 않은 것입니다. */
+export type ReturnRequest = {
+  kind?: "refund" | "exchange";
+  reason?: ReturnReason;
+  /** 상품 사용·훼손 여부 */
+  condition?: "intact" | "damaged";
+  /** 불량·오배송 사진(증빙) 확인 여부 */
+  evidence?: "confirmed" | "missing";
+  /** 교환 희망 옵션 (ExchangeOption.label) */
+  exchangeOption?: string;
 };
 
 export type CallTranscript = {
@@ -158,6 +184,8 @@ export type Session = {
   notices: string[];
   actions: PerformedAction[];
   memo: string;
+  /** 환불/교환 요청 구분과 처리 조건 확인 값 */
+  request?: ReturnRequest;
   transcripts: CallTranscript[];
   suggestion?: CategorySuggestion;
   alerts: Record<string, AlertStatus>;

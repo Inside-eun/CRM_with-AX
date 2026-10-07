@@ -11,6 +11,7 @@ import {
   returnDaysLeft,
   returnDeadline,
 } from "./format";
+import { FLOW_LABEL, assessRequest, requestFlow, type RequestFlow } from "./returns";
 import type { ActionId, Customer, HistoryRecord, Order, OrderStatus, Session } from "./types";
 
 export type Policy = { id: string; name: string; revisedAt: string; text: string };
@@ -87,6 +88,10 @@ export type StepDef = {
   doneWhen:
     | { type: "verified" }
     | { type: "order" }
+    /** 환불/교환 요청 구분을 선택함 */
+    | { type: "request" }
+    /** 처리 조건 판단이 '가능'이거나 이미 접수함 */
+    | { type: "eligible" }
     | { type: "manual" }
     | { type: "notice"; id: string }
     | { type: "action"; ids: ActionId[] };
@@ -115,28 +120,38 @@ const ORDER_STEP: StepDef = {
   id: "order",
   label: "관련 주문 확인",
   hint: "문의 대상 주문이 맞는지 고객에게 확인하세요.",
-  target: "좌측 · 관련 주문",
+  target: "좌측 · 대상 주문",
   doneWhen: { type: "order" },
+};
+
+const REQUEST_STEP: StepDef = {
+  id: "request",
+  label: "환불·교환 요청 구분",
+  hint: "고객이 환불을 원하는지 교환을 원하는지 확인하세요.",
+  target: "중앙 · 환불·교환 요청",
+  doneWhen: { type: "request" },
 };
 
 export const PLAYBOOKS: Record<CategoryId, Playbook> = {
   refund_exchange: {
     category: "refund_exchange",
     title: "환불·교환 처리",
-    summary: "반품 가능 기간과 배송비 부담 주체를 안내한 뒤 회수·교환을 접수하고, 환불은 회수 접수 후 요청합니다.",
+    summary:
+      "환불(출고 전 취소·배송 후 반품)인지 교환인지 먼저 구분하고, 기간·사유·상품 상태·상품별 정책·중복 접수를 확인한 뒤 비용을 안내하고 접수합니다. 접수는 처리 완료가 아닙니다.",
     steps: [
       VERIFY_STEP,
       ORDER_STEP,
+      REQUEST_STEP,
       {
-        id: "period",
-        label: "반품 가능 기간 안내",
-        hint: "수령 후 7일 이내인지 확인하고 안내하세요.",
-        target: "좌측 · 반품 기한",
-        doneWhen: { type: "notice", id: "return_period" },
+        id: "eligible",
+        label: "처리 조건 확인",
+        hint: "기간만으로 가능하다고 안내하지 말고 사유·상품 상태·상품별 정책·중복 접수를 함께 확인하세요.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
       },
       {
         id: "fee",
-        label: "반품 배송비 안내",
+        label: "비용·예상 금액 안내",
         hint: "단순 변심은 왕복 배송비 6,000원이 고객 부담입니다.",
         target: "중앙 · 필수 안내 체크",
         doneWhen: { type: "notice", id: "return_fee" },
@@ -145,8 +160,8 @@ export const PLAYBOOKS: Record<CategoryId, Playbook> = {
         id: "pickup",
         label: "회수 또는 교환 접수",
         hint: "고객 동의를 받은 뒤 확정하세요.",
-        target: "하단 · 반품 회수 접수",
-        doneWhen: { type: "action", ids: ["return_pickup", "exchange"] },
+        target: "하단 · 처리",
+        doneWhen: { type: "action", ids: ["return_pickup", "exchange", "payment_cancel"] },
       },
       {
         id: "refund",
@@ -160,7 +175,8 @@ export const PLAYBOOKS: Record<CategoryId, Playbook> = {
       {
         id: "return_period",
         label: "반품 가능 기간",
-        script: "상품을 받으신 날부터 7일 이내라 반품 신청이 가능합니다.",
+        script:
+          "단순 변심은 상품을 받으신 날부터 7일, 불량·오배송은 30일 이내에 신청하실 수 있습니다. 상품 상태와 사유를 확인한 뒤 접수 가능 여부를 안내해 드리겠습니다.",
         policyId: "p-return",
       },
       {
@@ -451,6 +467,169 @@ export const PLAYBOOKS: Record<CategoryId, Playbook> = {
   },
 };
 
+const RX = PLAYBOOKS.refund_exchange;
+const rxNotice = (id: string) => RX.notices.find((n) => n.id === id)!;
+const payNotice = (id: string) => PLAYBOOKS.payment.notices.find((n) => n.id === id)!;
+
+/** 환불/교환 요청 구분 뒤의 세부 흐름별 매뉴얼. 처리 단계·필수 안내·처리 버튼이 흐름에 따라 바뀝니다. */
+export const REQUEST_PLAYBOOKS: Record<RequestFlow, Playbook> = {
+  cancel: {
+    ...RX,
+    title: FLOW_LABEL.cancel,
+    summary: "출고 전 주문은 결제 승인을 취소해 환불합니다. 배송비는 없고 카드사 반영까지 영업일 기준 3~5일이 걸립니다.",
+    steps: [
+      VERIFY_STEP,
+      ORDER_STEP,
+      REQUEST_STEP,
+      {
+        id: "eligible",
+        label: "출고 전 여부·중복 접수 확인",
+        hint: "출고 전 주문만 즉시 취소할 수 있습니다.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
+      },
+      {
+        id: "rule",
+        label: "취소 금액·기준 안내",
+        hint: "전액 취소되며 배송비가 없다고 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "cancel_rule" },
+      },
+      {
+        id: "cancel",
+        label: "결제 취소 접수",
+        hint: "고객 동의를 받은 뒤 확정하세요. 접수 후 카드사 반영까지는 완료가 아닙니다.",
+        target: "하단 · 결제 취소",
+        doneWhen: { type: "action", ids: ["payment_cancel"] },
+      },
+      {
+        id: "timing",
+        label: "카드사 반영 기간 안내",
+        hint: "영업일 기준 3~5일이 걸립니다.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "card_refund_timing" },
+      },
+    ],
+    notices: [payNotice("cancel_rule"), payNotice("card_refund_timing")],
+    actions: ["payment_cancel"],
+    policies: ["p-payment", "p-refund"],
+  },
+  return: {
+    ...RX,
+    title: FLOW_LABEL.return,
+    summary: "반품 조건을 확인하고 배송비·예상 환불액을 안내한 뒤 회수를 접수합니다. 환불은 회수 접수 후 요청하며, 검수가 끝나야 실제로 환불됩니다.",
+    steps: [
+      VERIFY_STEP,
+      ORDER_STEP,
+      REQUEST_STEP,
+      {
+        id: "eligible",
+        label: "반품 조건 확인",
+        hint: "기간·사유·상품 상태·상품별 정책·중복 접수를 모두 확인하세요.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
+      },
+      {
+        id: "fee",
+        label: "반품 배송비·예상 환불액 안내",
+        hint: "단순 변심은 왕복 배송비 6,000원이 환불액에서 차감됩니다.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "return_fee" },
+      },
+      {
+        id: "pickup",
+        label: "반품 회수 접수",
+        hint: "고객 동의를 받은 뒤 확정하세요.",
+        target: "하단 · 반품 회수 접수",
+        doneWhen: { type: "action", ids: ["return_pickup"] },
+      },
+      {
+        id: "refund_req",
+        label: "환불 요청",
+        hint: "회수 검수가 끝나면 환불되도록 요청합니다.",
+        target: "하단 · 환불 요청",
+        doneWhen: { type: "action", ids: ["refund"] },
+      },
+      {
+        id: "refund",
+        label: "환불 일정 안내",
+        hint: "검수 후 3~5영업일(간편결제 1~3영업일) 내 환불됩니다.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "refund_timing" },
+      },
+    ],
+    notices: [rxNotice("return_period"), rxNotice("return_fee"), rxNotice("refund_timing")],
+    actions: ["return_pickup", "refund"],
+  },
+  exchange: {
+    ...RX,
+    title: FLOW_LABEL.exchange,
+    summary: "희망 옵션의 재고와 가격 차이, 배송비 부담을 확인해 안내한 뒤 교환을 접수합니다. 교환 상품은 회수·검수 후 출고됩니다.",
+    steps: [
+      VERIFY_STEP,
+      ORDER_STEP,
+      REQUEST_STEP,
+      {
+        id: "eligible",
+        label: "교환 조건 확인",
+        hint: "기간·사유·상품 상태·상품별 정책·희망 옵션 재고를 확인하세요.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
+      },
+      {
+        id: "fee",
+        label: "교환 비용·가격 차이 안내",
+        hint: "배송비 부담 주체와 옵션 가격 차이를 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "exchange_fee" },
+      },
+      {
+        id: "exchange",
+        label: "교환 접수",
+        hint: "고객 동의를 받은 뒤 확정하세요.",
+        target: "하단 · 교환 접수",
+        doneWhen: { type: "action", ids: ["exchange"] },
+      },
+      {
+        id: "timing",
+        label: "교환 일정 안내",
+        hint: "회수·검수 후 교환 상품이 출고된다고 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "exchange_timing" },
+      },
+    ],
+    notices: [
+      {
+        id: "exchange_fee",
+        label: "교환 배송비·가격 차이",
+        script:
+          "단순 변심 교환은 왕복 배송비 6,000원이 고객님 부담이며, 불량·오배송이면 저희가 부담합니다. 옵션 가격이 다르면 차액을 추가 결제하거나 환불해 드립니다.",
+        policyId: "p-return",
+        requiredFor: ["exchange"],
+      },
+      {
+        id: "exchange_timing",
+        label: "교환 일정",
+        script: "상품을 회수해 검수한 뒤 교환 상품을 보내드리며, 출고되면 문자로 안내해 드리겠습니다.",
+        policyId: "p-return",
+      },
+    ],
+    actions: ["exchange"],
+  },
+};
+
+/** 전체 매뉴얼(세부 흐름 포함) — 안내 이름 찾기 등에 씁니다. */
+export const ALL_PLAYBOOKS: Playbook[] = [...Object.values(PLAYBOOKS), ...Object.values(REQUEST_PLAYBOOKS)];
+
+/** 상담에 적용할 매뉴얼. 환불/교환은 요청 구분과 주문 상태에 따라 세부 흐름을 고릅니다. */
+export function playbookFor(session: Session, order?: Order): Playbook {
+  if (session.category === "refund_exchange") {
+    const flow = requestFlow(session, order);
+    if (flow) return REQUEST_PLAYBOOKS[flow];
+  }
+  return PLAYBOOKS[session.category ?? "other"];
+}
+
 export const COMMON_ACTIONS: ActionId[] = ["transfer", "callback"];
 
 export type ActionField =
@@ -609,6 +788,16 @@ export function actionBlockedReason(actionId: ActionId, session: Session, order?
   const done = (id: ActionId) => session.actions.some((a) => a.actionId === id);
   const needsOrder: ActionId[] = ["tracking", "return_pickup", "exchange", "refund", "reship", "payment_cancel", "as"];
   if (needsOrder.includes(actionId) && !order) return "관련 주문을 먼저 선택하세요.";
+  // 환불/교환 상담은 요청 구분과 처리 조건 판단이 끝나야 접수할 수 있습니다.
+  const submitActions: ActionId[] = ["return_pickup", "exchange", "payment_cancel"];
+  if (session.category === "refund_exchange" && [...submitActions, "refund"].includes(actionId)) {
+    if (!session.request?.kind) return "환불·교환 요청 구분을 먼저 선택하세요.";
+    if (submitActions.includes(actionId) && !done(actionId)) {
+      const a = assessRequest(session, order);
+      if (a.verdict === "no") return `접수 불가 조건이 있습니다: ${a.title}`;
+      if (a.verdict === "check") return `처리 조건 확인이 끝나지 않았습니다: ${a.title}`;
+    }
+  }
   switch (actionId) {
     case "tracking":
       return order?.invoice ? undefined : "출고 전 주문이라 송장이 없습니다.";
@@ -690,26 +879,37 @@ export function briefingChecks(
           : { id: "delivered", label: "배송 완료일 확인", hint: "아직 배송 완료 전입니다.", status: "warning", statusLabel: "배송 전" },
       );
       if (left !== undefined && deadline) {
+        // 기간은 조건 중 하나일 뿐이라 '반품 가능'으로 확정하지 않습니다.
         items.push({
           id: "period",
-          label: "반품 가능 기간",
-          hint: `수령 후 7일 · ${fmtDate(deadline)}까지`,
-          status: left < 0 ? "blocked" : left <= 1 ? "warning" : "done",
-          statusLabel: left < 0 ? "기간 경과" : left === 0 ? "오늘까지" : `D-${left}`,
+          label: "반품·교환 기간 (단순 변심 7일 기준)",
+          hint:
+            left < 0
+              ? `${fmtDate(deadline)} 경과 · 불량·오배송이면 수령 후 30일까지 가능`
+              : `${fmtDate(deadline)}까지 · 기간 조건만 충족, 다른 조건은 통화 중 확인`,
+          status: left <= 1 ? "warning" : "done",
+          statusLabel: left < 0 ? "단순 변심 기간 경과" : left === 0 ? "오늘까지" : `D-${left}`,
         });
       }
       items.push({
-        id: "fee",
-        label: "반품 배송비 부담 주체 안내",
-        hint: `단순 변심 → 고객 부담 ${fmtWon(RETURN_SHIPPING_FEE)}`,
+        id: "request",
+        label: "환불·교환 구분, 요청 사유, 상품 사용·훼손 여부",
+        hint: "단순 변심과 불량·오배송은 기한·배송비가 다릅니다.",
         status: "todo",
-        statusLabel: "필수 안내",
+        statusLabel: "통화 중 확인",
       });
       if (order) {
         items.push({
+          id: "policy",
+          label: "상품별 정책·중복 접수",
+          hint: order.returnPolicy ? order.returnPolicy.note : "상품 정책 정보 없음 · 지식·매뉴얼 확인 필요",
+          status: order.returnPolicy ? (order.returnPolicy.simpleChange ? "done" : "warning") : "warning",
+          statusLabel: order.returnPolicy ? (order.returnPolicy.simpleChange ? "자동 확인" : "단순 변심 불가") : "확인 필요",
+        });
+        items.push({
           id: "refund",
-          label: "환불 예정 금액·시점 안내",
-          hint: `${fmtWon(order.price - RETURN_SHIPPING_FEE)} (단순 변심 기준) · 검수 후 3~5영업일`,
+          label: "비용·예상 환불액 안내",
+          hint: `단순 변심 ${fmtWon(order.price - RETURN_SHIPPING_FEE)} (배송비 ${fmtWon(RETURN_SHIPPING_FEE)} 차감) · 불량·오배송 ${fmtWon(order.price)}`,
           status: "todo",
           statusLabel: "필수 안내",
         });
@@ -799,7 +999,7 @@ export function briefingChecks(
 
 export type StepState = StepDef & { status: "done" | "current" | "todo" };
 
-export function stepStates(playbook: Playbook, session: Session): StepState[] {
+export function stepStates(playbook: Playbook, session: Session, order?: Order): StepState[] {
   const isDone = (s: StepDef) => {
     const w = s.doneWhen;
     switch (w.type) {
@@ -807,6 +1007,12 @@ export function stepStates(playbook: Playbook, session: Session): StepState[] {
         return session.verified;
       case "order":
         return session.orderConfirmed;
+      case "request":
+        return !!session.request?.kind;
+      case "eligible": {
+        const a = assessRequest(session, order);
+        return a.verdict === "ok" || !!a.submitted;
+      }
       case "notice":
         return session.notices.includes(w.id);
       case "action":

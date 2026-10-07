@@ -25,7 +25,7 @@ export function CrmChecklist({ items = [], onToggle, numbered = true, style }) {
                 {s.icon ? <Icon name={s.icon} size={12} /> : numbered ? i + 1 : null}
               </span>
               <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ display: 'block', font: `${cur ? 600 : 500} 14px/20px var(--font-sans)`, color: s.text, textDecoration: it.status === 'done' ? 'line-through' : 'none', textDecorationColor: 'var(--gray-300)' }}>{it.label}</span>
+                <span style={{ display: 'block', font: `${cur ? 600 : 500} 14px/20px var(--font-sans)`, color: s.text, textDecorationLine: it.status === 'done' ? 'line-through' : 'none', textDecorationColor: 'var(--gray-300)' }}>{it.label}</span>
                 {it.hint && <span style={{ display: 'block', font: '400 12px/18px var(--font-sans)', color: 'var(--gray-500)', marginTop: 2 }}>{it.hint}</span>}
               </span>
               <span className="crm-sr" style={{ font: '500 12px/22px var(--font-sans)', color: cur ? 'var(--brand-700)' : it.status === 'warning' ? 'var(--warning-700)' : 'var(--gray-400)', whiteSpace: 'nowrap' }}>{it.statusLabel || s.label}</span>

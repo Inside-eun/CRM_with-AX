@@ -3,7 +3,8 @@
 import { isoDaysAgo } from "./format";
 import type { CrmState, Customer, HistoryRecord, Order, QueueItem } from "./types";
 
-export const STATE_VERSION = 1;
+// 주문에 상품별 반품 정책·교환 옵션을 추가하면서 2로 올렸습니다. 이전 저장본은 새 목 데이터로 바뀝니다.
+export const STATE_VERSION = 2;
 
 function orderNo(iso: string, seq: string) {
   const d = new Date(iso);
@@ -126,6 +127,12 @@ export function createSeed(now = new Date()): CrmState {
         { title: "간선 상차", at: ago(7, 22, 10), desc: "곤지암 허브" },
         { title: "집화 완료", at: ago(8, 16), desc: "파주 물류센터" },
       ],
+      returnPolicy: { simpleChange: true, note: "의류 · 택 제거·착용 흔적이 있으면 단순 변심 반품 불가" },
+      exchangeOptions: [
+        { label: "베이지 / S", stock: 4, price: 89000 },
+        { label: "베이지 / L", stock: 0, price: 89000 },
+        { label: "네이비 / M", stock: 2, price: 92000 },
+      ],
     },
     {
       no: orderNo(ago(7), "011873"),
@@ -145,6 +152,7 @@ export function createSeed(now = new Date()): CrmState {
         { title: "간선 하차", at: ago(4, 3, 12), desc: "곤지암 허브 · 이후 갱신 없음" },
         { title: "집화 완료", at: ago(5, 15), desc: "이천 물류센터" },
       ],
+      returnPolicy: { simpleChange: true, note: "신발 · 실외 착용 흔적이 있으면 단순 변심 반품 불가" },
     },
     {
       no: orderNo(ago(0), "020114"),
@@ -157,6 +165,7 @@ export function createSeed(now = new Date()): CrmState {
       payMethod: "현대카드 1127 일시불",
       approvalNo: "30929017",
       status: "결제 완료",
+      returnPolicy: { simpleChange: true, note: "액세서리 · 포장 개봉 후에도 미사용이면 반품 가능" },
     },
     {
       no: orderNo(ago(27), "118903"),
@@ -173,6 +182,7 @@ export function createSeed(now = new Date()): CrmState {
       invoice: "6892-0009-1180",
       shippedAt: ago(26, 16),
       deliveredAt: ago(24, 12),
+      returnPolicy: { simpleChange: true, note: "의류 · 택 제거·착용 흔적이 있으면 단순 변심 반품 불가" },
     },
     // 이도윤
     {
@@ -193,6 +203,7 @@ export function createSeed(now = new Date()): CrmState {
         { title: "배송 출발 전", at: ago(5, 9), desc: "성남 터미널 · 이후 갱신 없음" },
         { title: "집화 완료", at: ago(6, 14), desc: "용인 물류센터" },
       ],
+      returnPolicy: { simpleChange: true, note: "주방용품 · 사용 흔적이 있으면 단순 변심 반품 불가" },
     },
     {
       no: orderNo(ago(5), "009912"),
@@ -209,6 +220,7 @@ export function createSeed(now = new Date()): CrmState {
       invoice: "6892-0015-3302",
       shippedAt: ago(4, 15),
       deliveredAt: ago(3, 10, 30),
+      returnPolicy: { simpleChange: false, note: "음향 기기 · 개봉 후 단순 변심 반품·교환 불가 (불량·오배송만 가능)" },
     },
     // 정하은
     {
@@ -238,6 +250,7 @@ export function createSeed(now = new Date()): CrmState {
       payMethod: "삼성카드 8841 일시불",
       approvalNo: "88419022",
       status: "결제 완료",
+      returnPolicy: { simpleChange: true, note: "잡화 · 미사용이면 반품 가능" },
     },
     // 최민준
     {
@@ -255,6 +268,7 @@ export function createSeed(now = new Date()): CrmState {
       invoice: "6892-0001-9021",
       shippedAt: ago(73, 15),
       deliveredAt: ago(71, 12),
+      returnPolicy: { simpleChange: true, note: "소형 가전 · 사용 흔적이 있으면 단순 변심 반품 불가" },
     },
     // 한지우
     {
@@ -272,6 +286,12 @@ export function createSeed(now = new Date()): CrmState {
       invoice: "6892-0016-0081",
       shippedAt: ago(3, 16),
       deliveredAt: ago(2, 14, 10),
+      returnPolicy: { simpleChange: true, note: "의류 · 택 제거·착용 흔적이 있으면 단순 변심 반품 불가" },
+      exchangeOptions: [
+        { label: "그레이 / M", stock: 3, price: 59000 },
+        { label: "블랙 / L", stock: 0, price: 59000 },
+        { label: "차콜 / L", stock: 1, price: 55000 },
+      ],
     },
   ];
 

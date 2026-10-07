@@ -32,7 +32,7 @@ import {
   updateWrapup,
   wrapupValues,
 } from "@/lib/crm/operations";
-import { PLAYBOOKS, TRANSFER_DEPTS } from "@/lib/crm/playbooks";
+import { TRANSFER_DEPTS, playbookFor } from "@/lib/crm/playbooks";
 import { readCrm } from "@/lib/crm/store";
 import type { CrmState, Session, SummaryFields } from "@/lib/crm/types";
 import { ConsultGuard } from "../ConsultGuard";
@@ -69,7 +69,7 @@ function WrapUp({ state, session }: { state: CrmState; session: Session }) {
   const customer = state.customers[session.customerId];
   const order = sessionOrder(state);
   const intake = intakeResult(session);
-  const playbook = PLAYBOOKS[session.category ?? "other"];
+  const playbook = playbookFor(session, order);
   const values = wrapupValues(w);
   const [retrying, setRetrying] = useState(false);
   const [saving, setSaving] = useState(false);

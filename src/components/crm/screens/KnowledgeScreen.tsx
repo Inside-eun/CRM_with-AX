@@ -112,9 +112,11 @@ export function KnowledgeScreen({ category, policy }: { category?: string; polic
                           ? "안내 체크"
                           : s.doneWhen.type === "action"
                             ? "처리 기능"
-                            : s.doneWhen.type === "manual"
+                            : s.doneWhen.type === "manual" || s.doneWhen.type === "request"
                               ? "상담사 확인"
-                              : "자동 확인",
+                              : s.doneWhen.type === "eligible"
+                                ? "조건 판단"
+                                : "자동 확인",
                     }))}
                   />
                 </div>
