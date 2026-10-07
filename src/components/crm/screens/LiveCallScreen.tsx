@@ -68,6 +68,7 @@ import {
 } from "@/lib/crm/playbooks";
 import {
   FLOW_LABEL,
+  HANDOFF_HINT,
   RETURN_REASONS,
   VERDICT_LABEL,
   assessRequest,
@@ -75,6 +76,7 @@ import {
   isDefectReason,
   requestFlow,
   returnDeadlineFor,
+  type Basis,
   type RequestFlow,
   type Verdict,
 } from "@/lib/crm/returns";
@@ -221,7 +223,7 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
 
         {/* 중앙: 대화 → 환불·교환 요청 → 메모 → 필수 안내 (세로 배치, 넘치면 스크롤) */}
         <div className="crm-scroll flex min-w-0 flex-1 flex-col gap-3 p-4">
-          <ConversationCard session={session} hold={hold} />
+          <ConversationCard session={session} hold={hold} compact={session.category === "refund_exchange"} />
           {session.category === "refund_exchange" && (
             <RequestPanel
               session={session}
@@ -620,7 +622,22 @@ function LeftTabs({ state, session, order }: { state: CrmState; session: Session
 const VERDICT_TONE: Record<Verdict, "success" | "danger" | "warning"> = { ok: "success", no: "danger", check: "warning" };
 const VERDICT_ICON: Record<Verdict, IconName> = { ok: "CheckCircle", no: "AlertOctagon", check: "AlertTriangle" };
 
-/** 환불/교환 요청 구분 + 처리 조건 판단 근거 + 비용·일정 + 처리 현황 */
+function BasisRow({ basis: b }: { basis: Basis }) {
+  return (
+    <li className="flex items-start gap-2 text-[13px] leading-5">
+      <Icon
+        name={VERDICT_ICON[b.verdict]}
+        size={14}
+        className="mt-[3px] flex-none"
+        style={{ color: `var(--${b.verdict === "ok" ? "success" : b.verdict === "no" ? "error" : "warning"}-600)` }}
+      />
+      <span className="w-24 flex-none font-medium text-gray-700">{b.label}</span>
+      <span className="min-w-0 flex-1 text-gray-600">{b.text}</span>
+    </li>
+  );
+}
+
+/** 환불/교환 요청 구분 + 판단 결과·다음 행동 + (접힘) 상세 근거·비용 + 처리 현황 */
 function RequestPanel({ session, order, stepLabel }: { session: Session; order?: Order; stepLabel?: string }) {
   const [copied, setCopied] = useState(false);
   const req = session.request ?? {};
@@ -628,10 +645,17 @@ function RequestPanel({ session, order, stepLabel }: { session: Session; order?:
   const flow = a.flow;
   const locked = !!a.submitted;
   const showReturnInputs = flow && flow !== "cancel" && !!order?.deliveredAt;
+  const issues = a.basis.filter((b) => b.verdict !== "ok");
 
   return (
     <CrmCard
       title="환불·교환 요청"
+      subtitle={
+        flow &&
+        `${FLOW_LABEL[flow]} · ${
+          flow === "cancel" ? "결제 승인 취소로 환불" : flow === "return" ? "회수·검수 후 환불" : "회수·검수 후 교환 상품 출고"
+        }`
+      }
       icon="RotateCcw"
       tone={stepLabel ? "info" : undefined}
       stepLabel={stepLabel}
@@ -654,18 +678,7 @@ function RequestPanel({ session, order, stepLabel }: { session: Session; order?:
           바뀝니다.
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-[13px] text-gray-600">
-            <CrmBadge tone="info" square>
-              {FLOW_LABEL[flow]}
-            </CrmBadge>
-            {flow === "cancel"
-              ? "결제 완료(출고 전) 주문 · 결제 승인 취소로 환불"
-              : flow === "return"
-                ? "출고된 주문 · 회수 후 검수를 거쳐 환불"
-                : "회수 후 검수를 거쳐 교환 상품 출고"}
-          </div>
-
+        <div className="flex flex-col gap-2.5">
           {showReturnInputs && (
             <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
               <CrmSelect
@@ -726,51 +739,94 @@ function RequestPanel({ session, order, stepLabel }: { session: Session; order?:
           )}
 
           <div
-            className="rounded-lg border p-3"
+            className="flex flex-col gap-2 rounded-lg border p-3"
             style={{
               borderColor: `var(--${VERDICT_TONE[a.verdict] === "danger" ? "error" : VERDICT_TONE[a.verdict]}-200)`,
               background: `var(--${VERDICT_TONE[a.verdict] === "danger" ? "error" : VERDICT_TONE[a.verdict]}-25)`,
             }}
             aria-live="polite"
           >
-            <div className="mb-2 flex flex-wrap items-center gap-2">
+            {/* 불가 원인과 추가 확인 항목은 상세 근거를 접어도 항상 보입니다 */}
+            <div className="flex flex-wrap items-center gap-1.5">
               <CrmBadge tone={VERDICT_TONE[a.verdict]} icon={VERDICT_ICON[a.verdict]} size="md">
                 {VERDICT_LABEL[a.verdict]}
               </CrmBadge>
-              <span className="text-sm font-semibold text-gray-900">{a.title}</span>
+              {a.verdict === "check" && !a.submitted ? (
+                issues.map((b) => (
+                  <CrmBadge key={b.id} tone="warning" title={b.text}>
+                    {b.label}
+                  </CrmBadge>
+                ))
+              ) : (
+                <span className="text-sm font-semibold text-gray-900">{a.title}</span>
+              )}
             </div>
-            <div className="mb-1 text-xs font-semibold text-gray-500">판단 근거</div>
-            <ul className="m-0 flex list-none flex-col gap-1 p-0">
-              {a.basis.map((b) => (
-                <li key={b.id} className="flex items-start gap-2 text-[13px] leading-5">
-                  <Icon
-                    name={VERDICT_ICON[b.verdict]}
-                    size={14}
-                    className="mt-[3px] flex-none"
-                    style={{ color: `var(--${b.verdict === "ok" ? "success" : b.verdict === "no" ? "error" : "warning"}-600)` }}
-                  />
-                  <span className="w-24 flex-none font-medium text-gray-700">{b.label}</span>
-                  <span className="min-w-0 flex-1 text-gray-600">{b.text}</span>
-                </li>
-              ))}
-            </ul>
+            {a.verdict === "check" && !a.title.startsWith("추가 확인 필요") && (
+              <div className="text-[13px] font-semibold text-gray-900">{a.title}</div>
+            )}
+            {a.verdict === "no" && (
+              <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+                {issues
+                  .filter((b) => b.verdict === "no")
+                  .map((b) => (
+                    <BasisRow key={b.id} basis={b} />
+                  ))}
+              </ul>
+            )}
+            {!a.submitted && a.next.length > 0 && (
+              <div>
+                <div className="mb-0.5 text-xs font-semibold text-gray-500">다음 행동</div>
+                <ol className="m-0 list-decimal pl-5 text-[13px] leading-5 text-gray-800">
+                  {a.next
+                    .filter((n) => n !== HANDOFF_HINT)
+                    .map((n) => (
+                      <li key={n}>{n}</li>
+                    ))}
+                </ol>
+                {a.next.includes(HANDOFF_HINT) && <div className="mt-0.5 text-xs text-gray-500">{HANDOFF_HINT}</div>}
+              </div>
+            )}
+            {a.basis.length > 0 && (
+              <Disclosure summary={`상세 판단 근거 (${a.basis.length}개 항목)`}>
+                <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+                  {a.basis.map((b) => (
+                    <BasisRow key={b.id} basis={b} />
+                  ))}
+                </ul>
+              </Disclosure>
+            )}
           </div>
 
-          {a.costs.length > 0 && (
-            <div>
-              <div className="mb-1.5 text-xs font-semibold text-gray-500">비용 · 예상 금액 · 일정</div>
-              <CrmKeyValue labelWidth={84} items={a.costs} />
+          {a.costs.length > 0 &&
+            (a.verdict === "ok" || a.submitted ? (
+              <div>
+                <div className="mb-1.5 text-xs font-semibold text-gray-500">비용 · 예상 금액 · 일정</div>
+                <CrmKeyValue labelWidth={84} items={a.costs} />
+              </div>
+            ) : (
+              // 불가·추가 확인 상태에서는 금액·일정이 확정 안내처럼 보이지 않도록 접어 둡니다.
+              <Disclosure summary={a.verdict === "no" ? "접수 가능한 경우의 참고 정보" : "비용 · 예상 금액 · 일정 (조건 확인 후 확정)"}>
+                <CrmKeyValue labelWidth={84} items={a.costs} />
+              </Disclosure>
+            ))}
+
+          {a.verdict !== "no" && (
+            <Disclosure summary={`고객 안내 문구 (${VERDICT_LABEL[a.verdict]} 기준)`}>
+              <CrmSuggestedReply
+                context={`안내 문구 · ${VERDICT_LABEL[a.verdict]} 기준${copied ? " · 복사됨" : ""}`}
+                text={a.script}
+                onInsert={() => appendMemo(`[안내] ${a.script}`)}
+                onCopy={() => {
+                  void navigator.clipboard?.writeText(a.script).then(() => setCopied(true));
+                }}
+              />
+            </Disclosure>
+          )}
+          {a.verdict === "no" && !a.submitted && (
+            <div className="text-xs text-gray-500">
+              불가 사유·대안 안내 문구는 우측 상담 가이드에 있습니다. 안내한 뒤 아래 필수 안내 체크에 표시하세요.
             </div>
           )}
-
-          <CrmSuggestedReply
-            context={`안내 문구 · ${VERDICT_LABEL[a.verdict]} 기준${copied ? " · 복사됨" : ""}`}
-            text={a.script}
-            onInsert={() => appendMemo(`[안내] ${a.script}`)}
-            onCopy={() => {
-              void navigator.clipboard?.writeText(a.script).then(() => setCopied(true));
-            }}
-          />
 
           {a.submitted && <RequestProgress session={session} flow={flow} />}
         </div>
@@ -811,7 +867,7 @@ function RequestProgress({ session, flow }: { session: Session; flow: RequestFlo
   );
 }
 
-function ConversationCard({ session, hold }: { session: Session; hold: boolean }) {
+function ConversationCard({ session, hold, compact }: { session: Session; hold: boolean; compact?: boolean }) {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const voice = useVoiceClassify({
     onStart: () => setVoiceError(null),
@@ -845,7 +901,8 @@ function ConversationCard({ session, hold }: { session: Session; hold: boolean }
       }
       actions={<VoiceCaptureButtons voice={voice} size="xs" recordLabel="통화 음성 인식" />}
       // 중앙 컬럼이 스크롤되므로 최소 높이를 두고 남는 공간만 채웁니다.
-      style={{ flex: "1 0 260px", minHeight: 260 }}
+      // 환불·교환 패널이 있을 때는 메모까지 덜 스크롤하도록 더 낮춥니다(대화 기록은 카드 안에서 스크롤).
+      style={{ flex: `1 0 ${compact ? 150 : 200}px`, minHeight: compact ? 150 : 200 }}
       bodyStyle={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}
     >
       <div ref={scrollRef} className="crm-scroll flex min-h-0 flex-1 flex-col gap-3">

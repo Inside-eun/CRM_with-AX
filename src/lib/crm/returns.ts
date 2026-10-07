@@ -46,6 +46,10 @@ export type Assessment = {
   /** 판단 결과에 맞춘 고객 안내 문구 (매뉴얼 기준 문장 조합) */
   script: string;
   costs: { label: string; value: string; highlight?: boolean }[];
+  /** 상담사가 이어서 할 일 (판단 결과에 따라 다름) */
+  next: string[];
+  /** 불가일 때 고객에게 안내할 대안 문구 */
+  alternative?: string;
   /** 이번 상담에서 이미 접수한 처리 */
   submitted?: PerformedAction;
 };
@@ -56,8 +60,30 @@ const NO_REASON_PHRASE: Record<string, string> = {
   condition: "사용하시거나 훼손된 상품은 단순 변심으로",
   policy: "이 상품은 상품별 정책상 단순 변심으로",
   dup: "이미 접수된 건이 있어 새로",
-  option: "희망하신 옵션의 재고가 없어",
+  option: "희망하신 옵션의 재고가 없어 해당 옵션으로는",
 };
+
+/** 추가 확인이 필요한 근거별 상담사 할 일 */
+function checkAction(b: Basis, order: Order): string {
+  switch (b.id) {
+    case "reason":
+      return "요청 사유(단순 변심 / 상품 불량 / 오배송) 확인";
+    case "condition":
+      return "상품 사용·훼손 여부(착용 흔적, 택·포장 상태) 확인";
+    case "evidence":
+      return "불량 부위·오배송 상품 사진 요청 후 확인";
+    case "policy":
+      return order.returnPolicy ? "요청 사유 확인 (단순 변심이면 상품별 정책상 불가)" : "지식·매뉴얼에서 상품별 반품 정책 확인";
+    case "period":
+      return "불량·오배송인지 확인 (30일 기준 적용)";
+    case "option":
+      return order.exchangeOptions?.length ? "고객 희망 옵션 확인" : "상품 MD팀에 교환 옵션·재고 확인 (담당자 이관)";
+    default:
+      return `${b.label} 확인`;
+  }
+}
+
+export const HANDOFF_HINT = "바로 확인하기 어려우면 담당자 이관 또는 콜백 예약";
 
 const PENDING_STATUSES: OrderStatus[] = ["반품 접수", "교환 접수", "환불 요청", "결제 취소 요청"];
 const SIMPLE_PAY = /페이/;
@@ -200,10 +226,19 @@ export function assessRequest(session: Session, order?: Order): Assessment {
       basis: [],
       script: "환불을 원하시는지, 다른 옵션으로 교환을 원하시는지 여쭤봐도 될까요?",
       costs: [],
+      next: ["고객에게 환불·교환 중 원하는 요청 확인"],
     };
   }
   if (!order) {
-    return { flow, verdict: "check", title: "대상 주문을 먼저 선택하세요", basis: [], script: "어떤 주문 건인지 확인해 드리겠습니다.", costs: [] };
+    return {
+      flow,
+      verdict: "check",
+      title: "대상 주문을 먼저 선택하세요",
+      basis: [],
+      script: "어떤 주문 건인지 확인해 드리겠습니다.",
+      costs: [],
+      next: ["좌측 '다른 주문'에서 대상 주문 선택"],
+    };
   }
   const submitted = session.actions.find((a) => a.actionId === FLOW_SUBMIT_ACTION[flow] && a.orderNo === order.no);
   const dup = duplicateBasis(order, submitted);
@@ -225,7 +260,21 @@ export function assessRequest(session: Session, order?: Order): Assessment {
       script:
         verdict === "ok"
           ? `아직 출고 전이라 결제를 바로 취소해 드릴 수 있습니다. ${fmtWon(order.price)} 전액이 취소되며 ${refundSchedule(order)}이 걸릴 수 있습니다.`
-          : "확인해 보니 이미 처리 중인 건이 있어 바로 취소해 드리기 어렵습니다. 진행 상황을 확인해 안내해 드리겠습니다.",
+          : order.status === "결제 완료" || submitted
+            ? "확인해 보니 이미 처리 중인 건이 있어 새로 취소를 접수하기 어렵습니다."
+            : "확인해 보니 이미 출고되어 결제를 바로 취소해 드리기 어렵습니다.",
+      next:
+        verdict === "ok"
+          ? ["취소 금액·카드사 반영 기간 안내", "고객 동의 후 결제 취소 접수"]
+          : bases[0].verdict === "no"
+            ? ["출고 후라 즉시 취소 불가 안내", "상품 수령 후 배송 후 반품으로 진행 안내"]
+            : ["기존 접수 건 진행 상황 확인·안내"],
+      alternative:
+        verdict === "ok"
+          ? undefined
+          : bases[0].verdict === "no"
+            ? "상품을 받으신 뒤 반품으로 진행해 드릴 수 있습니다. 받으시면 다시 연락 주세요."
+            : "이미 접수된 건의 진행 상황을 확인해 안내해 드리겠습니다.",
       costs: [
         { label: "취소 금액", value: `${fmtWon(order.price)} (전액)`, highlight: true },
         { label: "비용", value: "없음 (출고 전)" },
@@ -254,7 +303,9 @@ export function assessRequest(session: Session, order?: Order): Assessment {
       submitted,
       basis: bases,
       title: `지금은 ${noun} 접수 불가 · 배송 완료 후 진행`,
-      script: `상품이 아직 배송 중이라 지금은 ${noun} 접수가 어렵습니다. 상품을 받으신 뒤 다시 연락 주시면 바로 접수해 드리겠습니다.`,
+      script: `상품이 아직 배송 중이라 지금은 ${noun} 접수가 어렵습니다.`,
+      alternative: `상품을 받으신 뒤 다시 연락 주시면 ${noun} 가능 여부를 확인해 드리겠습니다. 원하시면 받으실 즈음 저희가 먼저 연락드리겠습니다.`,
+      next: ["배송 중이라 지금은 접수 불가 안내", "상품 수령 후 재문의 안내 또는 콜백 예약"],
       costs: [],
     };
   }
@@ -268,7 +319,7 @@ export function assessRequest(session: Session, order?: Order): Assessment {
     } else if (!opt) {
       bases.push({ id: "option", label: "희망 옵션·재고", verdict: "check", text: "고객 희망 옵션 확인 필요" });
     } else if (opt.stock <= 0) {
-      bases.push({ id: "option", label: "희망 옵션·재고", verdict: "no", text: `${opt.label} 재고 없음 · 다른 옵션이나 환불 안내` });
+      bases.push({ id: "option", label: "희망 옵션·재고", verdict: "no", text: `${opt.label} 재고 없음` });
     } else {
       bases.push({ id: "option", label: "희망 옵션·재고", verdict: "ok", text: `${opt.label} · 재고 ${opt.stock}개` });
     }
@@ -301,9 +352,7 @@ export function assessRequest(session: Session, order?: Order): Assessment {
         : `확인 결과 반품 접수가 가능합니다. ${fee}${simple ? "(환불 금액에서 차감)" : ""}. 회수된 상품 검수가 끝나면 환불이 진행됩니다.`;
   } else if (verdict === "no") {
     const why = bases.find((b) => b.verdict === "no")!;
-    script = `죄송하지만 확인해 보니 ${NO_REASON_PHRASE[why.id] ?? "처리 조건에 맞지 않아"} ${noun} 접수가 어렵습니다.${
-      flow === "exchange" && why.id === "option" ? " 다른 옵션으로 바꾸시거나 환불로 진행하실 수 있습니다." : ""
-    }`;
+    script = `죄송하지만 확인해 보니 ${NO_REASON_PHRASE[why.id] ?? "처리 조건에 맞지 않아"} ${noun} 접수가 어렵습니다.`;
   } else if (periodOk) {
     script = `${noun} 가능 기간 안에는 있으시지만, 상품 상태와 ${noun} 사유를 먼저 확인한 뒤 접수 가능 여부를 안내해 드리겠습니다.`;
   } else {
@@ -351,5 +400,49 @@ export function assessRequest(session: Session, order?: Order): Assessment {
     );
   }
 
-  return { flow, verdict, title, basis: bases, script, costs, submitted };
+  // 다음 행동과 대안. 교환 불가를 환불 가능으로 해석하지 않고, 환불은 요청 구분을 바꿔 환불 정책으로 다시 판단합니다.
+  let next: string[];
+  let alternative: string | undefined;
+  if (verdict === "ok") {
+    next =
+      flow === "exchange"
+        ? ["교환 배송비·가격 차이 안내", "고객 동의 후 교환 접수"]
+        : ["반품 배송비·예상 환불액 안내", "고객 동의 후 반품 회수 접수"];
+  } else if (verdict === "check") {
+    next = [...checks.map((b) => checkAction(b, order)), HANDOFF_HINT];
+  } else {
+    const why = bases.find((b) => b.verdict === "no")!;
+    const inStock = (order.exchangeOptions ?? []).filter((o) => o.stock > 0 && o.label !== req.exchangeOption);
+    const defectStillOpen = calendarDaysBetween(order.deliveredAt) <= DEFECT_WINDOW_DAYS;
+    switch (why.id) {
+      case "option":
+        next = [
+          inStock.length ? `재고 있는 다른 옵션 안내: ${inStock.map((o) => o.label).join(", ")}` : "교환 가능한 다른 옵션 없음 안내",
+          "반품·환불을 원하면 요청 구분을 '환불'로 바꿔 환불 정책으로 다시 확인",
+        ];
+        alternative = `${inStock.length ? `${inStock.map((o) => o.label).join(", ")} 옵션은 지금 교환이 가능합니다. ` : ""}다른 옵션을 확인하거나 반품·환불 가능 여부를 별도로 확인하겠습니다.`;
+        break;
+      case "period":
+        next = [
+          "기간 경과로 접수 불가 안내",
+          ...(req.reason === "단순 변심" && defectStillOpen ? ["불량·오배송이면 30일 기준으로 다시 확인"] : []),
+          "필요하면 VOC 등록 또는 담당자 이관",
+        ];
+        alternative =
+          req.reason === "단순 변심" && defectStillOpen
+            ? "상품에 불량이 있거나 다른 상품이 왔다면 수령 후 30일까지 접수할 수 있어 확인해 드리겠습니다."
+            : "불편을 드려 죄송합니다. 말씀하신 내용은 담당 부서에 전달해 드리겠습니다.";
+        break;
+      case "condition":
+      case "policy":
+        next = [`${why.label} 사유로 단순 변심 ${noun} 불가 안내`, "불량·오배송 의심이면 요청 사유를 바꿔 다시 확인"];
+        alternative = "상품에 불량이 있거나 다른 상품이 왔다면 불량·오배송으로 접수할 수 있어 확인해 드리겠습니다.";
+        break;
+      default:
+        next = ["기존 접수 건 진행 상황 확인·안내"];
+        alternative = "이미 접수된 건의 진행 상황을 확인해 안내해 드리겠습니다.";
+    }
+  }
+
+  return { flow, verdict, title, basis: bases, script, costs, next, alternative, submitted };
 }

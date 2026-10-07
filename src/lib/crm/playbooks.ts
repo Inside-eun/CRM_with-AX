@@ -618,14 +618,116 @@ export const REQUEST_PLAYBOOKS: Record<RequestFlow, Playbook> = {
   },
 };
 
+/** 접수하지 않고 끝내는 분기의 안내. 문구는 판단 결과에 맞춰 playbookFor에서 바꿉니다. */
+const CLOSURE_NOTICES: Record<"deny_reason" | "alternative" | "handoff_told", Notice> = {
+  deny_reason: { id: "deny_reason", label: "불가 사유 안내", script: "확인해 보니 접수 조건에 맞지 않아 접수가 어렵습니다.", policyId: "p-return" },
+  alternative: { id: "alternative", label: "대안 안내", script: "다른 방법을 확인해 안내해 드리겠습니다.", policyId: "p-return" },
+  handoff_told: {
+    id: "handoff_told",
+    label: "추가 확인·후속 연락 안내",
+    script: "확인이 필요한 부분은 담당 부서에서 확인한 뒤 연락드리겠습니다.",
+    policyId: "p-return",
+  },
+};
+
 /** 전체 매뉴얼(세부 흐름 포함) — 안내 이름 찾기 등에 씁니다. */
-export const ALL_PLAYBOOKS: Playbook[] = [...Object.values(PLAYBOOKS), ...Object.values(REQUEST_PLAYBOOKS)];
+export const ALL_PLAYBOOKS: Playbook[] = [
+  ...Object.values(PLAYBOOKS),
+  ...Object.values(REQUEST_PLAYBOOKS),
+  { ...RX, notices: Object.values(CLOSURE_NOTICES) },
+];
+
+const HANDOFF_ACTIONS: ActionId[] = ["transfer", "callback"];
+
+/**
+ * 접수 없이 끝내는 분기.
+ * denied = 처리 불가 판단, handoff = 추가 확인이 필요한 채로 이관·콜백함. 이미 접수했으면 undefined.
+ */
+export function requestClosure(session: Session, order?: Order): "denied" | "handoff" | undefined {
+  if (session.category !== "refund_exchange") return undefined;
+  const a = assessRequest(session, order);
+  if (!a.flow || a.submitted) return undefined;
+  if (a.verdict === "no") return "denied";
+  if (a.verdict === "check" && session.actions.some((x) => HANDOFF_ACTIONS.includes(x.actionId))) return "handoff";
+  return undefined;
+}
 
 /** 상담에 적용할 매뉴얼. 환불/교환은 요청 구분과 주문 상태에 따라 세부 흐름을 고릅니다. */
 export function playbookFor(session: Session, order?: Order): Playbook {
   if (session.category === "refund_exchange") {
     const flow = requestFlow(session, order);
-    if (flow) return REQUEST_PLAYBOOKS[flow];
+    if (flow) {
+      const base = REQUEST_PLAYBOOKS[flow];
+      const closure = requestClosure(session, order);
+      if (!closure) return base;
+      // 접수할 수 없는 분기에서는 접수·비용 안내 단계 대신 종료 조건(불가 사유·대안·이관)을 둡니다.
+      const a = assessRequest(session, order);
+      const upToCheck = base.steps.slice(0, base.steps.findIndex((st) => st.id === "eligible") + 1).map((st) =>
+        st.id === "eligible"
+          ? { ...st, label: closure === "denied" ? `${st.label} · 불가 확인` : `${st.label} · 추가 확인 이관` }
+          : st,
+      );
+      if (closure === "denied") {
+        return {
+          ...base,
+          title: `${base.title} · 접수 불가`,
+          summary: "처리 조건에 맞지 않아 접수하지 않습니다. 불가 사유와 대안을 안내하고, 필요하면 추가 확인을 이관합니다.",
+          steps: [
+            ...upToCheck,
+            {
+              id: "deny",
+              label: "불가 사유 안내",
+              hint: a.title,
+              target: "중앙 · 필수 안내 체크",
+              doneWhen: { type: "notice", id: "deny_reason" },
+            },
+            {
+              id: "alt",
+              label: "대안 안내",
+              hint: a.next.join(" / "),
+              target: "중앙 · 필수 안내 체크",
+              doneWhen: { type: "notice", id: "alternative" },
+            },
+            {
+              id: "handoff",
+              label: "추가 확인·이관",
+              hint: "고객이 이의를 제기하거나 확인이 더 필요하면 VOC 등록·담당자 이관·콜백 예약을 하세요.",
+              target: "하단 · 담당자 이관",
+              optional: true,
+              doneWhen: { type: "action", ids: ["transfer", "callback", "voc"] },
+            },
+          ],
+          notices: [
+            { ...CLOSURE_NOTICES.deny_reason, script: a.script },
+            { ...CLOSURE_NOTICES.alternative, script: a.alternative ?? CLOSURE_NOTICES.alternative.script },
+          ],
+          actions: [...base.actions, "voc"],
+        };
+      }
+      return {
+        ...base,
+        title: `${base.title} · 추가 확인 이관`,
+        summary: "처리 조건을 상담 중 확인하지 못해 이관·콜백으로 넘깁니다. 접수는 하지 않습니다.",
+        steps: [
+          ...upToCheck,
+          {
+            id: "handoff",
+            label: "추가 확인·이관",
+            hint: a.next.slice(0, -1).join(" / ") || "확인이 필요한 항목을 이관 메모에 남기세요.",
+            target: "하단 · 담당자 이관",
+            doneWhen: { type: "action", ids: HANDOFF_ACTIONS },
+          },
+          {
+            id: "handoff_told",
+            label: "후속 연락 안내",
+            hint: "확인 후 연락드린다고 안내하세요.",
+            target: "중앙 · 필수 안내 체크",
+            doneWhen: { type: "notice", id: "handoff_told" },
+          },
+        ],
+        notices: [CLOSURE_NOTICES.handoff_told],
+      };
+    }
   }
   return PLAYBOOKS[session.category ?? "other"];
 }
@@ -1010,8 +1112,9 @@ export function stepStates(playbook: Playbook, session: Session, order?: Order):
       case "request":
         return !!session.request?.kind;
       case "eligible": {
+        // 가능·불가가 정해졌거나, 추가 확인 사항을 이관했으면 조건 확인 단계는 끝난 것으로 봅니다.
         const a = assessRequest(session, order);
-        return a.verdict === "ok" || !!a.submitted;
+        return a.verdict !== "check" || !!a.submitted || requestClosure(session, order) === "handoff";
       }
       case "notice":
         return session.notices.includes(w.id);

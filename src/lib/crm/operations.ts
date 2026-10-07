@@ -5,6 +5,7 @@ import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import type { ClassifyResult } from "@/lib/useVoiceClassify";
 import { RETURN_SHIPPING_FEE, fmtShortDate, fmtWon, isoDaysAgo, receiptNo, toDateInput, uid } from "./format";
 import { ACTIONS, ALL_PLAYBOOKS, suggestOrder } from "./playbooks";
+import { FLOW_LABEL, VERDICT_LABEL, assessRequest } from "./returns";
 import { readCrm, updateCrm } from "./store";
 import type {
   ActionId,
@@ -168,7 +169,28 @@ export function toggleStep(id: string) {
 
 /** 환불/교환 요청 구분·조건 확인 값을 바꿉니다. undefined 값은 '미확인'으로 되돌립니다. */
 export function updateRequest(patch: Partial<ReturnRequest>) {
-  updateSession((s) => ({ ...s, request: { ...s.request, ...patch } }));
+  updateSession((s) => {
+    const prev = s.request?.kind;
+    // 요청 구분을 바꾸면 이전 판단을 이어 쓰지 않고 새 흐름의 정책으로 다시 판단합니다(메모에 기록).
+    const switched = patch.kind && prev && patch.kind !== prev;
+    const label = (k: "refund" | "exchange") => (k === "refund" ? "환불" : "교환");
+    return {
+      ...s,
+      request: { ...s.request, ...patch },
+      memo: switched
+        ? appendLine(s.memo, `[분류] 요청 구분 변경: ${label(prev)} → ${label(patch.kind!)} (${label(patch.kind!)} 정책으로 다시 판단)`)
+        : s.memo,
+    };
+  });
+}
+
+/** 환불/교환 요청을 접수하지 않은 경우의 결과 요약. 접수했거나 해당 없으면 undefined */
+export function requestOutcome(state: CrmState): string | undefined {
+  const s = state.session;
+  if (!s || s.category !== "refund_exchange") return undefined;
+  const a = assessRequest(s, sessionOrder(state));
+  if (!a.flow || a.submitted) return undefined;
+  return `${FLOW_LABEL[a.flow]} ${VERDICT_LABEL[a.verdict]} 판단 — ${a.title}. 접수하지 않았습니다.`;
 }
 
 export function setMemo(memo: string) {
@@ -341,6 +363,7 @@ export function buildSummaryInput(state: CrmState) {
     order: order ? { item: order.item, option: order.option, price: order.price, status: order.status } : null,
     notices: s.notices.map((id) => noticeLabel(id)),
     actions: s.actions.map((a) => ({ label: a.label, receiptNo: a.receiptNo ?? null, detail: a.detail ?? null })),
+    requestOutcome: requestOutcome(state) ?? null,
   };
 }
 
@@ -355,11 +378,12 @@ export function buildRecordDraft(state: CrmState): SummaryFields {
   const told = s.notices.length
     ? `안내한 내용: ${s.notices.map(noticeLabel).join(", ")}.`
     : "필수 안내 체크 기록이 없습니다.";
-  const result = s.actions.length
-    ? s.actions.map((a) => `${a.label}${a.receiptNo ? ` (${a.receiptNo})` : ""}${a.detail ? ` · ${a.detail}` : ""}`).join("\n")
-    : s.verified
-      ? "처리 기능을 실행하지 않았습니다."
-      : "본인 확인을 하지 못해 처리 기능을 실행하지 않았습니다.";
+  const outcome = requestOutcome(state);
+  const result = [
+    ...s.actions.map((a) => `${a.label}${a.receiptNo ? ` (${a.receiptNo})` : ""}${a.detail ? ` · ${a.detail}` : ""}`),
+    ...(outcome ? [outcome] : []),
+  ].join("\n") ||
+    (s.verified ? "처리 기능을 실행하지 않았습니다." : "본인 확인을 하지 못해 처리 기능을 실행하지 않았습니다.");
   return { request, told, result };
 }
 

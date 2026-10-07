@@ -13,6 +13,8 @@ type SummaryInput = {
   order: { item: string; option: string; price: number; status: string } | null;
   notices: string[];
   actions: { label: string; receiptNo: string | null; detail: string | null }[];
+  /** 환불/교환을 접수하지 않고 끝낸 경우의 판단 결과 */
+  requestOutcome?: string | null;
 };
 
 // 상담 후처리용 AI 요약 초안. 상담사가 검토·수정한 뒤 저장합니다.
@@ -56,7 +58,7 @@ export async function POST(req: NextRequest) {
             properties: {
               request: { type: "string", description: "고객 요청사항" },
               told: { type: "string", description: "상담사가 고객에게 안내한 내용 (notices와 메모 기준)" },
-              result: { type: "string", description: "실제 처리 결과 (actions 기준, 없으면 처리하지 않았다고 씀)" },
+              result: { type: "string", description: "실제 처리 결과 (actions 기준, 없으면 처리하지 않았다고 씀. requestOutcome이 있으면 접수하지 않은 이유를 함께 쓰고 접수·완료했다고 쓰지 않음)" },
             },
             required: ["request", "told", "result"],
             additionalProperties: false,

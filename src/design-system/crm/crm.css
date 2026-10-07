@@ -82,6 +82,8 @@
 .crm-check.is-checked .crm-check-box{background:var(--brand-600);border-color:var(--brand-600)}
 .crm-check.is-disabled .crm-check-box{background:var(--gray-100);border-color:var(--gray-200);color:var(--gray-300)}
 .crm-check.radio .crm-check-box{border-radius:8px}
+/* 입력은 숨겨져 있어 키보드 포커스를 상자에 표시합니다 */
+.crm-check input:focus-visible+.crm-check-box{border-color:var(--brand-600);box-shadow:var(--ring-brand)}
 
 .crm-toggle{display:inline-flex;gap:8px;align-items:center;font:500 14px/20px var(--font-sans);color:var(--gray-700);cursor:pointer}
 .crm-toggle-track{width:36px;height:20px;border-radius:12px;background:var(--gray-100);padding:2px;transition:background var(--dur-base);flex:none}
