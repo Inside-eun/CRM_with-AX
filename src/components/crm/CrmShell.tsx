@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { CrmAppShell, Icon } from "@/design-system";
@@ -67,10 +66,6 @@ export function CrmShell({ children }: { children: ReactNode }) {
       navItems={navItems}
       navFooter={
         <div className="flex flex-col gap-1 border-t border-gray-800 pt-3">
-          <Link href="/classifier" className="crm-nav-item text-[13px]">
-            <Icon name="Mic" size={18} style={{ color: "var(--gray-400)" }} />
-            <span className="flex-1">음성 분류 단독 도구</span>
-          </Link>
           <ResetDemoButton />
         </div>
       }

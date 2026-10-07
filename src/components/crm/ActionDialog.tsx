@@ -11,7 +11,7 @@ import {
   CrmTimeline,
   Icon,
 } from "@/design-system";
-import { RETURN_SHIPPING_FEE, fmtDateTime, fmtWon, isoDaysAgo, toDateInput } from "@/lib/crm/format";
+import { RETURN_SHIPPING_FEE, fmtDateTime, fmtWon, isoDaysAgo, maskPay, toDateInput } from "@/lib/crm/format";
 import { performAction, refundAmount, sessionOrder, toggleNotice } from "@/lib/crm/operations";
 import { ACTIONS, playbookFor } from "@/lib/crm/playbooks";
 import {
@@ -20,6 +20,7 @@ import {
   assessRequest,
   exchangeOptionOf,
   exchangePriceDiff,
+  hasRequestFlow,
   isDefectReason,
 } from "@/lib/crm/returns";
 import type { ActionId, CrmState, PerformedAction, Session } from "@/lib/crm/types";
@@ -37,6 +38,7 @@ function defaultValues(actionId: ActionId, linked: Record<string, string | undef
 
 /** 상담 화면의 환불·교환 요청에서 이미 확인한 값. 대화상자에서 다시 고르지 않습니다. */
 function linkedValues(actionId: ActionId, session: Session): Record<string, string | undefined> {
+  if (actionId === "payment_change") return { method: session.request?.newPayMethod };
   if (session.category !== "refund_exchange") return {};
   if (actionId === "return_pickup") return { reason: session.request?.reason };
   if (actionId === "exchange") return { option: session.request?.exchangeOption };
@@ -63,7 +65,7 @@ export function ActionDialog({
   const playbook = playbookFor(session, order);
   const required = playbook.notices.filter((n) => n.requiredFor?.includes(actionId));
   const linked = linkedValues(actionId, session);
-  const assessment = session.category === "refund_exchange" ? assessRequest(session, order) : undefined;
+  const assessment = hasRequestFlow(session.category) ? assessRequest(session, order) : undefined;
 
   const [values, setValues] = useState(() => defaultValues(actionId, linked));
   const [consent, setConsent] = useState(false);
@@ -185,6 +187,15 @@ export function ActionDialog({
           { label: "예상 환불액", value: fmtWon(refundAmount(session, order.price)), highlight: true },
           { label: "환불 수단", value: order.payMethod },
           { label: "예상 일정", value: "회수 상품 검수 후 3~5영업일 (요청 접수 ≠ 환불 완료)" },
+        );
+      }
+      break;
+    case "payment_change":
+      if (order) {
+        context.push(
+          { label: "기존 결제", value: `${session.verified ? order.payMethod : maskPay(order.payMethod)} · ${fmtWon(order.price)} 승인 취소` },
+          { label: "새 결제 수단", value: linked.method ?? "미확인", highlight: true },
+          { label: "예상 일정", value: "기존 결제 취소 3~5영업일 · 재결제 링크 24시간 유효" },
         );
       }
       break;
@@ -312,7 +323,10 @@ export function ActionDialog({
           </ul>
           {def.receiptPrefix && (
             <div className="text-xs text-gray-500">
-              확정하면 접수만 됩니다. 실제 {actionId === "exchange" ? "교환 상품 출고" : "환불"}는 회수·검수 또는 카드사 반영 후 완료됩니다.
+              데모: 실제 주문·결제는 바뀌지 않고 이 브라우저의 상담 기록에만 남습니다.{" "}
+              확정하면 접수만 됩니다. 실제{" "}
+              {actionId === "exchange" ? "교환 상품 출고" : actionId === "payment_change" ? "결제 수단 변경" : "환불"}는 회수·검수, 카드사 반영
+              또는 고객 재결제 후 완료됩니다.
             </div>
           )}
         </div>

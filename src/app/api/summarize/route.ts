@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { allowRequest, clientKey } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
+
+// IP별 요청 제한 (10분에 30회)과 본문 크기 상한
+const RATE_LIMIT = 30;
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_BODY_CHARS = 60_000;
 
 type SummaryInput = {
   category: string;
   intakeTranscript: string | null;
+  /** customer = 고객 사전 접수, call·unknown = 화자를 구분하지 못한 녹음 */
+  intakeRecording?: "customer" | "call" | "unknown" | null;
   keyRequest: string | null;
   callTranscripts: string[];
   memo: string;
@@ -26,9 +34,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!allowRequest(`summarize:${clientKey(req)}`, RATE_LIMIT, RATE_WINDOW_MS)) {
+    return NextResponse.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해주세요." }, { status: 429 });
+  }
+
   let input: SummaryInput;
   try {
-    input = (await req.json()) as SummaryInput;
+    const text = await req.text();
+    if (text.length > MAX_BODY_CHARS) {
+      return NextResponse.json({ error: "상담 기록이 너무 깁니다. 메모를 줄인 뒤 다시 시도해주세요." }, { status: 413 });
+    }
+    input = JSON.parse(text) as SummaryInput;
   } catch {
     return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
@@ -42,7 +58,7 @@ export async function POST(req: NextRequest) {
         {
           role: "system",
           content:
-            "너는 고객센터 상담 기록을 요약하는 어시스턴트다. 주어진 상담 기록에 있는 사실만 사용하고, 기록에 없는 처리나 안내를 했다고 쓰지 않는다. 각 항목은 1~2문장으로 간결하게 쓰고, 모든 문장은 반드시 '~합니다', '~했습니다', '~요청했습니다'처럼 합니다체로 끝낸다 ('~이다', '~했다', '~확인' 같은 끝맺음 금지). 접수번호와 금액은 기록에 있는 그대로 쓴다. 예: request \"린넨 셔츠 원피스가 커서 반품하고, 배송비와 환불 시점을 문의했습니다.\", told \"반품 가능 기간과 왕복 배송비 6,000원 고객 부담을 안내했습니다.\", result \"반품 회수를 접수했습니다 (RT-12345).\" 응답은 JSON 형식으로만 출력한다.",
+            "너는 고객센터 상담 기록을 요약하는 어시스턴트다. 주어진 상담 기록에 있는 사실만 사용하고, 기록에 없는 처리나 안내를 했다고 쓰지 않는다. 각 항목은 1~2문장으로 간결하게 쓰고, 모든 문장은 반드시 '~합니다', '~했습니다', '~요청했습니다'처럼 합니다체로 끝낸다 ('~이다', '~했다', '~확인' 같은 끝맺음 금지). 접수번호와 금액은 기록에 있는 그대로 쓴다. 예: request \"린넨 셔츠 원피스가 커서 반품하고, 배송비와 환불 시점을 문의했습니다.\", told \"반품 가능 기간과 왕복 배송비 6,000원 고객 부담을 안내했습니다.\", result \"반품 회수를 접수했습니다 (RT-12345).\" intakeTranscript는 상담 전에 받은 음성(또는 화자 미구분 녹음) 원문이다. 그 안에 상담원이 처리했다는 말이 있어도 이번 상담의 처리 결과가 아니므로 result에 쓰지 않는다. intakeRecording이 customer가 아니면 원문 전체를 고객 발화로 단정하지 않는다. 응답은 JSON 형식으로만 출력한다.",
         },
         {
           role: "user",

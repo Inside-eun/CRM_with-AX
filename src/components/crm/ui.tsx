@@ -5,7 +5,8 @@ import { useSyncExternalStore, type ReactNode } from "react";
 import { CrmBadge, CrmCard, CrmSkeleton, Icon, type IconName } from "@/design-system";
 import type { CategoryId } from "@/lib/categories";
 import { categoryLabel } from "@/lib/crm/operations";
-import type { Grade, Stage, Urgency } from "@/lib/crm/types";
+import { NUMBER_MARK, demoScenario } from "@/lib/crm/demo-scenarios";
+import type { Grade, IntakeSource, RecordingKind, Stage, Urgency } from "@/lib/crm/types";
 
 // 1초마다 갱신되는 현재 시각. 서버 렌더링 중에는 0입니다.
 let now = 0;
@@ -134,7 +135,7 @@ export function MiniLabel({ children, className = "" }: { children: ReactNode; c
   return <div className={`mb-1.5 text-xs font-semibold text-gray-500 ${className}`}>{children}</div>;
 }
 
-/** 대화 말풍선. intake = AI 음성봇 접수, call = 통화 중 음성 인식 */
+/** 대화 말풍선. intake = 고객 사전 접수(고객 단독 음성), call = 통화 중 음성 인식(화자 미구분) */
 export function Bubble({ who, time, text, extra }: { who: "intake" | "call"; time?: string; text: string; extra?: ReactNode }) {
   return (
     <div className="flex gap-2.5" style={{ animation: "crm-slide-in .25s var(--ease-standard)" }}>
@@ -142,17 +143,58 @@ export function Bubble({ who, time, text, extra }: { who: "intake" | "call"; tim
         className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-gray-100 text-[11px] font-semibold text-gray-600"
         aria-hidden="true"
       >
-        고객
+        {who === "intake" ? "고객" : "통화"}
       </span>
       <div className="flex max-w-[85%] flex-col items-start gap-1">
         <div className="whitespace-pre-wrap rounded-[2px_10px_10px_10px] border border-gray-200 bg-white px-3 py-2 text-sm leading-[22px] text-gray-800">
           {text}
         </div>
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] leading-4 text-gray-400">
-          {who === "intake" ? "AI 음성 접수 · 음성 인식(STT)" : "통화 음성 인식(STT)"}
+          {who === "intake" ? "고객 사전 접수 · 음성 인식(STT)" : "통화 음성 인식(STT) · 화자 미구분"}
           {time && ` · ${time}`}
           {extra}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 접수 음성이 어디서 왔는지 (데모 음성 ① 등) */
+export function intakeSourceLabel(source?: IntakeSource): string | undefined {
+  if (!source) return undefined;
+  if (source.kind === "scenario") {
+    const sc = demoScenario(source.scenarioId);
+    return `데모 음성 ${NUMBER_MARK[sc.no]} ${sc.label}`;
+  }
+  return source.kind === "record" ? "직접 녹음" : "파일 업로드";
+}
+
+/**
+ * 접수 음성 원문. 고객 단독 음성만 고객 말풍선으로 보여 주고,
+ * 상담 전체 녹음·화자를 알 수 없는 업로드는 고객 발화로 단정하지 않고 원문 블록으로 보여 줍니다.
+ */
+export function IntakeTranscript({
+  text,
+  time,
+  recording = "customer",
+  extra,
+}: {
+  text: string;
+  time?: string;
+  recording?: RecordingKind;
+  extra?: ReactNode;
+}) {
+  if (recording === "customer") return <Bubble who="intake" time={time} text={text} extra={extra} />;
+  return (
+    <div className="flex flex-col gap-1" style={{ animation: "crm-slide-in .25s var(--ease-standard)" }}>
+      <div className="whitespace-pre-wrap rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm leading-[22px] text-gray-800">
+        {text}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px] leading-4 text-gray-400">
+        <Icon name="FileText" size={12} />
+        {recording === "call" ? "상담 녹음 원문" : "업로드 음성 원문"} · 화자 미구분 · 음성 인식(STT)
+        {time && ` · ${time}`}
+        {extra}
       </div>
     </div>
   );

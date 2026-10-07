@@ -43,7 +43,8 @@ export function HomeScreen() {
 
   const { agent, agentStatus, queue, session, customers, history } = state;
   const available = agentStatus === "available";
-  const next = queue[0];
+  // 진행 중인 상담이 있으면(데모 음성으로 고객을 바꾼 경우 포함) 그 고객을 다음 배정 고객으로 보여 줍니다.
+  const next = (session && queue.find((q) => q.id === session.queueId)) || queue[0];
   const nextCustomer = next ? customers[next.customerId] : undefined;
   const sessionForNext = session && next && session.queueId === next.id ? session : undefined;
   const intake = sessionForNext ? intakeResult(sessionForNext) : undefined;
@@ -120,9 +121,11 @@ export function HomeScreen() {
             }
             footer={
               <>
-                <span className="mr-auto flex items-center gap-1.5 self-center text-xs text-gray-500">
-                  <Icon name="Info" size={14} />
-                  사전 브리핑에서 문의 유형을 확정한 뒤 고객을 연결합니다
+                <span className="mr-auto flex items-center gap-1.5 self-center text-[13px] text-gray-600">
+                  <CrmBadge tone="info" square>
+                    체험
+                  </CrmBadge>
+                  사전 브리핑에서 고객 음성을 분석하고 상담 과정을 체험해보세요.
                 </span>
                 <CrmButton
                   variant="primary"
@@ -190,7 +193,8 @@ export function HomeScreen() {
                       <Icon name="MessageSquare" size={14} />
                       접수된 고객 발화 없음
                     </span>
-                    자동 음성 접수 연동 전입니다. 사전 브리핑에서 문의 유형을 직접 선택하거나 데모 음성 입력으로 시연할 수 있습니다.
+                    자동 음성 접수 연동 전입니다. 사전 브리핑의 &lsquo;고객 음성 분류 테스트하기&rsquo;에서 데모 음성을 골라 AI 분석을 시작할 수
+                    있습니다. 분석은 직접 시작할 때만 실행됩니다.
                   </div>
                 )}
                 {sessionForNext?.category && (

@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { CATEGORIES } from "@/lib/categories";
 import { normalizeAudioContainer } from "@/lib/audio-container";
+import { voiceClassifyEnabled } from "@/lib/feature-flags";
+import { allowRequest, clientKey } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
 // Whisper 업로드 상한
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+// IP별 요청 제한 (10분에 20회)
+const RATE_LIMIT = 20;
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+
+const RECORDING_KINDS = ["customer", "call", "unknown"] as const;
+type RecordingKind = (typeof RECORDING_KINDS)[number];
 
 /** OpenAI 원문 오류를 상담원이 조치할 수 있는 안내로 바꿉니다. */
 function toAgentMessage(err: unknown): string {
@@ -28,6 +36,11 @@ function toAgentMessage(err: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
+  // 공개 배포에서는 꺼 둡니다. 데모 화면은 미리 저장한 분석 결과(demo-results.json)를 씁니다.
+  if (!voiceClassifyEnabled()) {
+    return NextResponse.json({ error: "공개 데모에서는 음성 분석 API를 사용할 수 없습니다." }, { status: 403 });
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(
       { error: "서버에 OPENAI_API_KEY가 설정되어 있지 않습니다. .env.local을 확인하세요." },
@@ -35,10 +48,32 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!allowRequest(`classify:${clientKey(req)}`, RATE_LIMIT, RATE_WINDOW_MS)) {
+    return NextResponse.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해주세요." }, { status: 429 });
+  }
+
+  // 본문을 읽기 전에 크기를 확인해 큰 업로드를 일찍 거절합니다(폼 경계 여유분 1MB).
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > MAX_AUDIO_BYTES + 1024 * 1024) {
+    return NextResponse.json(
+      { error: "오디오 파일이 25MB를 넘습니다. 통화를 나눠 올리거나 더 짧은 구간만 올려주세요." },
+      { status: 413 }
+    );
+  }
+
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const formData = await req.formData();
+  let formData: FormData;
+  try {
+    formData = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
+  }
   const audio = formData.get("audio");
+  const recordingField = formData.get("recording");
+  const recording: RecordingKind = RECORDING_KINDS.includes(recordingField as RecordingKind)
+    ? (recordingField as RecordingKind)
+    : "customer";
 
   if (!audio || !(audio instanceof File)) {
     return NextResponse.json({ error: "오디오 파일이 없습니다." }, { status: 400 });
@@ -91,6 +126,11 @@ export async function POST(req: NextRequest) {
     }
 
     const categoryList = CATEGORIES.map((c) => `- ${c.id}: ${c.label}`).join("\n");
+    // 화자를 구분하지 못한 녹음은 상담원 말이 섞여 있으므로 고객 요청만 기준으로 분류하게 합니다.
+    const sourceDescription =
+      recording === "customer"
+        ? "다음은 고객이 상담 연결 전에 남긴 음성 메시지를 텍스트로 변환한 내용이다"
+        : "다음은 화자가 구분되지 않은 상담 녹음을 텍스트로 변환한 내용이다. 상담원과 고객의 말이 섞여 있을 수 있다. 고객이 요청한 내용만 기준으로 분류하고, 상담원이 안내하거나 처리했다고 말한 내용은 고객 요청이나 처리 결과로 쓰지 않는다";
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -101,7 +141,7 @@ export async function POST(req: NextRequest) {
         },
         {
           role: "user",
-          content: `다음은 고객이 남긴 음성 메시지를 텍스트로 변환한 내용이다:\n\n"${transcript}"\n\n이 요청을 분류해줘.`,
+          content: `${sourceDescription}:\n\n"${transcript}"\n\n이 요청을 분류해줘.`,
         },
       ],
       response_format: {

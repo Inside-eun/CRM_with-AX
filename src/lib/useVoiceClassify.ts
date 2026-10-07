@@ -16,6 +16,9 @@ export type ClassifyResult = {
 
 export type VoiceStatus = "idle" | "recording" | "uploading" | "done" | "error";
 
+/** customer = 고객 단독 음성, call = 상담 전체 녹음, unknown = 화자를 알 수 없음 */
+export type RecordingKind = "customer" | "call" | "unknown";
+
 /** 이보다 짧은 녹음은 Whisper에 보내지 않습니다. */
 const MIN_RECORDING_MS = 500;
 
@@ -25,9 +28,12 @@ const MIN_RECORDING_MS = 500;
  */
 const SILENCE_PEAK_THRESHOLD = 0.01;
 
+/** 결과가 어떤 입력에서 왔는지. tag는 호출한 쪽이 붙인 식별자(예: 데모 시나리오 id) */
+export type SubmitMeta = { input: "record" | "file"; recording: RecordingKind; tag?: string };
+
 type Options = {
-  onResult?: (result: ClassifyResult) => void;
-  onError?: (message: string) => void;
+  onResult?: (result: ClassifyResult, meta: SubmitMeta) => void;
+  onError?: (message: string, meta?: SubmitMeta) => void;
   onStart?: () => void;
 };
 
@@ -96,20 +102,21 @@ export function useVoiceClassify({ onResult, onError, onStart }: Options = {}) {
     [stopMeter],
   );
 
-  const fail = useCallback((message: string) => {
+  const fail = useCallback((message: string, meta?: SubmitMeta) => {
     setError(message);
     setStatus("error");
-    callbacksRef.current.onError?.(message);
+    callbacksRef.current.onError?.(message, meta);
   }, []);
 
   const submitAudio = useCallback(
-    async (blob: Blob) => {
+    async (blob: Blob, meta: SubmitMeta) => {
       setStatus("uploading");
       callbacksRef.current.onStart?.();
       try {
         const formData = new FormData();
         const filename = blob instanceof File ? blob.name : "recording.webm";
         formData.append("audio", blob, filename);
+        formData.append("recording", meta.recording);
 
         const res = await fetch("/api/classify", { method: "POST", body: formData });
         const data = await res.json();
@@ -120,9 +127,9 @@ export function useVoiceClassify({ onResult, onError, onStart }: Options = {}) {
 
         setResult(data as ClassifyResult);
         setStatus("done");
-        callbacksRef.current.onResult?.(data as ClassifyResult);
+        callbacksRef.current.onResult?.(data as ClassifyResult, meta);
       } catch (err) {
-        fail(err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.");
+        fail(err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.", meta);
       }
     },
     [fail],
@@ -162,7 +169,8 @@ export function useVoiceClassify({ onResult, onError, onStart }: Options = {}) {
           return;
         }
 
-        void submitAudio(blob);
+        // 마이크 녹음은 상담원이 고객 역할로 말하는 사전 접수 시연으로 봅니다.
+        void submitAudio(blob, { input: "record", recording: "customer" });
       };
 
       startedAtRef.current = Date.now();
@@ -184,7 +192,8 @@ export function useVoiceClassify({ onResult, onError, onStart }: Options = {}) {
   // File을 그대로 넘기면 fetch가 본문을 직렬화하는 시점에 backing store가
   // 끊겨 0바이트로 전송되는 경우가 있어 Whisper가 포맷 오류를 냅니다.
   const submitFile = useCallback(
-    async (file: File) => {
+    async (file: File, recording: RecordingKind = "unknown", tag?: string) => {
+      const meta: SubmitMeta = { input: "file", recording, tag };
       setError(null);
       setResult(null);
       setStatus("uploading");
@@ -193,12 +202,12 @@ export function useVoiceClassify({ onResult, onError, onStart }: Options = {}) {
       try {
         buffer = await file.arrayBuffer();
       } catch {
-        fail("파일을 읽을 수 없습니다. 클라우드 드라이브에 있는 파일이면 먼저 내려받은 뒤 다시 올려주세요.");
+        fail("파일을 읽을 수 없습니다. 클라우드 드라이브에 있는 파일이면 먼저 내려받은 뒤 다시 올려주세요.", meta);
         return;
       }
 
       if (buffer.byteLength === 0) {
-        fail("오디오 파일이 비어 있습니다. 파일이 온전히 내려받아졌는지 확인한 뒤 다시 올려주세요.");
+        fail("오디오 파일이 비어 있습니다. 파일이 온전히 내려받아졌는지 확인한 뒤 다시 올려주세요.", meta);
         return;
       }
 
@@ -206,7 +215,7 @@ export function useVoiceClassify({ onResult, onError, onStart }: Options = {}) {
         type: file.type || "application/octet-stream",
       });
       replaceAudioUrl(snapshot);
-      await submitAudio(snapshot);
+      await submitAudio(snapshot, meta);
     },
     [fail, replaceAudioUrl, submitAudio],
   );

@@ -19,7 +19,17 @@ import { categoryLabel, startSession, toggleHistoryFollowup } from "@/lib/crm/op
 import { ACTIONS } from "@/lib/crm/playbooks";
 import { useCrm } from "@/lib/crm/store";
 import type { SummaryFields } from "@/lib/crm/types";
-import { Bubble, EmptyState, GradeBadge, HomeLinkButton, LoadingScreen, MiniLabel, PageHeader, STAGE_ROUTES } from "../ui";
+import {
+  Bubble,
+  EmptyState,
+  GradeBadge,
+  HomeLinkButton,
+  IntakeTranscript,
+  LoadingScreen,
+  MiniLabel,
+  PageHeader,
+  STAGE_ROUTES,
+} from "../ui";
 
 const FIELDS: { id: keyof SummaryFields; label: string }[] = [
   { id: "request", label: "고객 요청사항" },
@@ -179,7 +189,7 @@ export function HistoryDetailScreen({ id, saved }: { id: string; saved: boolean 
             <CrmCard title="음성 접수 · AI 분류" icon="Mic">
               {h.intakeTranscript ? (
                 <div className="flex flex-col gap-3">
-                  <Bubble who="intake" text={h.intakeTranscript} />
+                  <IntakeTranscript text={h.intakeTranscript} recording={h.intakeRecording} />
                   {h.aiCategory && h.aiConfidence != null && (
                     <div className="flex flex-col gap-2 rounded-md border border-teal-200 bg-teal-25 p-3">
                       <CrmAILabel text={`AI 분류 ${categoryLabel(h.aiCategory)}`} confidence={Math.round(h.aiConfidence * 100)} />

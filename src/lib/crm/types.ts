@@ -33,6 +33,7 @@ export type OrderStatus =
   | "교환 접수"
   | "환불 요청"
   | "결제 취소 요청"
+  | "결제 수단 변경 요청"
   | "재배송 요청";
 
 export type TrackingEvent = { title: string; at: string; desc?: string };
@@ -79,11 +80,31 @@ export type QueueItem = {
   arsMenu: string;
 };
 
+/** 데모 음성 시나리오 id (src/lib/crm/demo-scenarios.ts) */
+export type DemoScenarioId = "cancel_return" | "exchange" | "payment_change";
+
+/**
+ * 접수 음성의 화자 구성.
+ * customer = 고객 혼자 남긴 사전 접수, call = 상담원·고객 대화 전체 녹음, unknown = 화자를 알 수 없는 업로드.
+ * call·unknown은 화자를 구분하지 못하므로 고객 발화로 표시하지 않습니다.
+ */
+export type RecordingKind = "customer" | "call" | "unknown";
+
+export type IntakeSource = { kind: "scenario"; scenarioId: DemoScenarioId } | { kind: "record" } | { kind: "upload" };
+
 export type Intake =
   | { status: "none" }
   | { status: "skipped"; at: string }
-  | { status: "failed"; error: string; at: string }
-  | { status: "done"; result: ClassifyResult; at: string };
+  | { status: "failed"; error: string; at: string; source?: IntakeSource }
+  | {
+      status: "done";
+      result: ClassifyResult;
+      at: string;
+      source?: IntakeSource;
+      recording?: RecordingKind;
+      /** 미리 실행해 저장한 분석 결과를 불러온 경우, 실제로 AI 분석을 실행한 시각 */
+      analyzedAt?: string;
+    };
 
 export type Stage = "briefing" | "live" | "wrapup";
 
@@ -95,6 +116,7 @@ export type ActionId =
   | "carrier_check"
   | "reship"
   | "payment_cancel"
+  | "payment_change"
   | "as"
   | "voc"
   | "transfer"
@@ -114,9 +136,14 @@ export type PerformedAction = {
 
 export type ReturnReason = "단순 변심" | "상품 불량" | "오배송";
 
-/** 환불/교환 상담에서 상담사가 고객에게 확인한 값. 비어 있으면 아직 확인하지 않은 것입니다. */
+/** 요청 구분. 환불/교환 상담은 refund·exchange, 결제 상담은 cancel·method_change */
+export type RequestKind = "refund" | "exchange" | "cancel" | "method_change";
+
+/** 환불/교환·결제 상담에서 상담사가 고객에게 확인한 값. 비어 있으면 아직 확인하지 않은 것입니다. */
 export type ReturnRequest = {
-  kind?: "refund" | "exchange";
+  kind?: RequestKind;
+  /** 결제 수단 변경 시 고객이 원하는 새 결제 수단 */
+  newPayMethod?: string;
   reason?: ReturnReason;
   /** 상품 사용·훼손 여부 */
   condition?: "intact" | "damaged";
@@ -168,6 +195,8 @@ export type Session = {
   stage: Stage;
   createdAt: string;
   intake: Intake;
+  /** 사전 브리핑에서 고른 데모 음성 시나리오 */
+  demoScenarioId?: DemoScenarioId;
   /** 상담사가 확정한 문의 유형 */
   category?: CategoryId;
   categorySource?: "ai" | "agent";
@@ -204,6 +233,7 @@ export type HistoryRecord = {
   aiCategory?: CategoryId;
   aiConfidence?: number;
   intakeTranscript?: string;
+  intakeRecording?: RecordingKind;
   keyRequest?: string;
   orderNo?: string;
   verified: boolean;

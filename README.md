@@ -11,7 +11,31 @@ npm run dev
 ```
 
 - `http://localhost:3000` — 상담원 화면
-- `http://localhost:3000/classifier` — 음성 분류 단독 도구
+- `http://localhost:3000/classifier` — 음성 분류 단독 도구 (로컬 개발에서만)
+
+## 데모 음성 (포트폴리오 체험)
+
+사전 브리핑의 **고객 음성 분류 테스트하기**에서 데모 음성 3개를 골라 재생하고 AI 분석을 시작할 수 있습니다. 음성 인식 크레딧을 아끼기 위해 분석은 로컬에서 한 번만 실행해 `src/lib/crm/demo-results.json`에 저장하고, 화면에서는 저장된 결과를 불러옵니다(방문자가 직접 녹음·업로드하는 기능은 없습니다).
+
+| 시나리오 | 파일 경로 | 연결 데이터 |
+| --- | --- | --- |
+| ① 주문 취소·반품 요청 | `public/demo-audio/01-cancel-return.m4a` | 박서연 · 린넨 셔츠 원피스 (배송 완료) |
+| ② 제품 교환 요청 | `public/demo-audio/02-exchange.m4a` | 한지우 · 오버핏 후드티 (교환 옵션·재고) |
+| ③ 결제 수단 변경 요청 | `public/demo-audio/03-payment-change.m4a` | 정하은 · 가죽 카드지갑 (결제 완료·출고 전) |
+
+```bash
+npm run dev                                  # 다른 터미널에서 실행해 둔 상태로
+node scripts/analyze-demo-audio.mjs          # 결과가 없는 음성만 분석해 저장 (음성 3개 = API 3회)
+node scripts/analyze-demo-audio.mjs --force  # 파일을 바꿨을 때 전부 다시 분석
+```
+
+- 파일 이름을 바꾸려면 `src/lib/crm/demo-scenarios.ts`의 `audioSrc`를 고친 뒤 스크립트를 다시 실행합니다. 경로가 바뀐 시나리오의 예전 결과는 쓰지 않습니다.
+- 파일이 없으면 '음성 준비 중', 파일은 있지만 저장된 결과가 없으면 '분석 결과 준비 중'으로 표시하고 분석 버튼만 막습니다.
+- 고객 혼자 말한 음성은 `recording: "customer"`(고객 사전 접수), 상담원·고객 대화 전체 녹음은 `"call"`(상담 녹음 원문, 화자 미구분)로 설정합니다.
+- 데모 상태는 방문자 브라우저(localStorage)에만 저장되어 방문자끼리 섞이지 않습니다. '다시 테스트'는 진행 중 상담과 주문·대기열만 처음 상태로 되돌립니다.
+- 공개 배포(production 빌드)에서는 `/api/classify`와 `/classifier`(음성 분류 단독 도구)를 끕니다(403·404). 로컬 `npm run dev`에서는 켜져 있으며, 배포에서도 켜려면 `ENABLE_VOICE_CLASSIFY=true`를 설정합니다.
+- 데모 음성은 상담원·고객 대화 전체 녹음이라 `recording: "call"`로 설정되어 있습니다(상담 녹음 원문 · 화자 미구분으로 표시).
+- `/api/classify`·`/api/summarize`는 IP별 요청 수(10분에 20회·30회)와 크기(음성 25MB·요약 입력 6만 자)를 제한합니다.
 
 ## 구조
 

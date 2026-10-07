@@ -36,7 +36,6 @@ import {
   maskPhone,
 } from "@/lib/crm/format";
 import {
-  addCallTranscript,
   appendMemo,
   callSeconds,
   categoryLabel,
@@ -69,23 +68,34 @@ import {
 import {
   FLOW_LABEL,
   HANDOFF_HINT,
+  REQUEST_KINDS,
   RETURN_REASONS,
   VERDICT_LABEL,
   assessRequest,
   exchangePriceDiff,
+  hasRequestFlow,
   isDefectReason,
+  payChangeOptions,
   requestFlow,
   returnDeadlineFor,
   type Basis,
   type RequestFlow,
   type Verdict,
 } from "@/lib/crm/returns";
-import type { ActionId, CrmState, Customer, Order, PerformedAction, ReturnReason, Session } from "@/lib/crm/types";
-import { useVoiceClassify } from "@/lib/useVoiceClassify";
+import type { ActionId, CrmState, Customer, Order, PerformedAction, RequestKind, ReturnReason, Session } from "@/lib/crm/types";
 import { ActionDialog } from "../ActionDialog";
 import { ConsultGuard } from "../ConsultGuard";
-import { RecordingIndicator, VoiceCaptureButtons } from "../VoiceCapture";
-import { Bubble, ConfirmedCategoryBadge, GradeBadge, MiniLabel, STAGE_ROUTES, useNow } from "../ui";
+import { DemoGuide, DemoGuideToggle } from "../DemoGuide";
+import {
+  Bubble,
+  ConfirmedCategoryBadge,
+  GradeBadge,
+  IntakeTranscript,
+  MiniLabel,
+  STAGE_ROUTES,
+  intakeSourceLabel,
+  useNow,
+} from "../ui";
 
 export function LiveCallScreen() {
   return <ConsultGuard stage="live">{(ctx) => <LiveCall {...ctx} />}</ConsultGuard>;
@@ -100,7 +110,8 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
   const steps = stepStates(playbook, session, order);
   const current = steps.find((s) => s.status === "current");
   const pending = steps.filter((s) => s.status !== "done" && !s.optional);
-  const flow = session.category === "refund_exchange" ? requestFlow(session, order) : undefined;
+  const requestCase = hasRequestFlow(session.category);
+  const flow = requestCase ? requestFlow(session, order) : undefined;
 
   const [dialog, setDialog] = useState<ActionId | null>(null);
   const [endConfirm, setEndConfirm] = useState(false);
@@ -130,6 +141,7 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <DemoGuide session={session} variant="bar" />
       {/* 통화 헤더 */}
       <div className="relative flex items-center gap-4 border-b border-gray-200 bg-white px-6 py-3">
         {/* 좁은 화면에서는 고객·유형 배지만 다음 줄로 넘기고 통화 버튼은 한 줄을 유지합니다 */}
@@ -166,6 +178,7 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
           )}
         </div>
         <div className="flex flex-none items-center gap-2">
+          <DemoGuideToggle />
           <CrmButton icon={hold ? "Play" : "Pause"} onClick={toggleHold}>
             {hold ? "보류 해제" : "보류"}
           </CrmButton>
@@ -223,10 +236,11 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
 
         {/* 중앙: 대화 → 환불·교환 요청 → 메모 → 필수 안내 (세로 배치, 넘치면 스크롤) */}
         <div className="crm-scroll flex min-w-0 flex-1 flex-col gap-3 p-4">
-          <ConversationCard session={session} hold={hold} compact={session.category === "refund_exchange"} />
-          {session.category === "refund_exchange" && (
+          <ConversationCard session={session} hold={hold} compact={requestCase} />
+          {requestCase && (
             <RequestPanel
               session={session}
+              customer={customer}
               order={order}
               stepLabel={stepLabelFor("request") ?? stepLabelFor("eligible")}
             />
@@ -252,7 +266,12 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
         className="relative flex flex-none flex-wrap items-center gap-3 border-t border-gray-200 bg-white px-6 py-3"
         style={{ boxShadow: "0 -4px 8px -2px rgba(16,24,40,0.04)" }}
       >
-        <span className="mr-1 text-[13px] font-semibold text-gray-500">처리</span>
+        <span className="mr-1 flex items-center gap-1.5 text-[13px] font-semibold text-gray-500">
+          처리
+          <CrmBadge tone="neutral" square title="처리 버튼은 화면 기록만 남기며 실제 주문·결제는 바뀌지 않습니다">
+            데모 · 실제 주문 변경 없음
+          </CrmBadge>
+        </span>
         {actionIds.map((id) => {
           const def = ACTIONS[id];
           const blocked = actionBlockedReason(id, session, order);
@@ -283,8 +302,8 @@ function LiveCall({ state, session }: { state: CrmState; session: Session }) {
           <Icon name={session.verified ? "Info" : "Lock"} size={14} />
           {!session.verified
             ? "본인 확인 전에는 담당자 이관·콜백 외 처리 기능을 쓸 수 없습니다"
-            : session.category === "refund_exchange" && !flow
-              ? "환불·교환 요청 구분을 선택하면 해당 처리 버튼이 바뀝니다"
+            : requestCase && !flow
+              ? "요청 구분을 선택하면 해당 처리 버튼이 바뀝니다"
               : "현재 단계와 관련된 버튼만 강조됩니다 · 접수는 처리 완료가 아닙니다"}
         </span>
         {dialog && (
@@ -449,7 +468,12 @@ function TargetOrderCard({
           <CrmBadge tone="success" icon="Check">
             고객 확인
           </CrmBadge>
-        ) : undefined
+        ) : (
+          // 문의 유형·데모 음성으로 고른 주문은 고객에게 확인하기 전까지 후보입니다.
+          <CrmBadge tone="warning" title="고객에게 주문을 확인하기 전입니다">
+            후보 · 확인 전
+          </CrmBadge>
+        )
       }
       footer={
         session.orderConfirmed ? undefined : (
@@ -469,6 +493,9 @@ function TargetOrderCard({
           label="수령일"
           value={order.deliveredAt ? fmtDate(order.deliveredAt) : order.shippedAt ? "배송 중 · 미수령" : "출고 전"}
         />
+        {session.category === "payment" ? (
+          <Fact wide label="결제 수단" value={session.verified ? order.payMethod : maskPay(order.payMethod)} />
+        ) : (
         <Fact
           wide
           label={`반품 기한 · ${reason && reason !== "단순 변심" ? "불량·오배송 30일" : "단순 변심 7일"}`}
@@ -480,6 +507,7 @@ function TargetOrderCard({
           tone={left !== undefined && left < 0 ? "danger" : left !== undefined && left <= 1 ? "warning" : undefined}
           highlight={isReturnCase && currentStepId === "eligible"}
         />
+        )}
       </div>
       {isReturnCase && order.returnPolicy && (
         <div className="mt-2 text-xs text-gray-600">
@@ -638,25 +666,38 @@ function BasisRow({ basis: b }: { basis: Basis }) {
 }
 
 /** 환불/교환 요청 구분 + 판단 결과·다음 행동 + (접힘) 상세 근거·비용 + 처리 현황 */
-function RequestPanel({ session, order, stepLabel }: { session: Session; order?: Order; stepLabel?: string }) {
+function RequestPanel({
+  session,
+  customer,
+  order,
+  stepLabel,
+}: {
+  session: Session;
+  customer: Customer;
+  order?: Order;
+  stepLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const req = session.request ?? {};
   const a = assessRequest(session, order);
   const flow = a.flow;
   const locked = !!a.submitted;
-  const showReturnInputs = flow && flow !== "cancel" && !!order?.deliveredAt;
+  const showReturnInputs = (flow === "return" || flow === "exchange") && !!order?.deliveredAt;
   const issues = a.basis.filter((b) => b.verdict !== "ok");
+  const isPayment = session.category === "payment";
+  const kinds = REQUEST_KINDS[session.category!] ?? [];
+  const FLOW_DESC: Record<RequestFlow, string> = {
+    cancel: "결제 승인 취소로 환불",
+    return: "회수·검수 후 환불",
+    exchange: "회수·검수 후 교환 상품 출고",
+    method_change: "기존 결제 취소 후 재결제",
+  };
 
   return (
     <CrmCard
-      title="환불·교환 요청"
-      subtitle={
-        flow &&
-        `${FLOW_LABEL[flow]} · ${
-          flow === "cancel" ? "결제 승인 취소로 환불" : flow === "return" ? "회수·검수 후 환불" : "회수·검수 후 교환 상품 출고"
-        }`
-      }
-      icon="RotateCcw"
+      title={isPayment ? "결제 요청" : "환불·교환 요청"}
+      subtitle={flow && `${FLOW_LABEL[flow]} · ${FLOW_DESC[flow]}`}
+      icon={isPayment ? "CreditCard" : "RotateCcw"}
       tone={stepLabel ? "info" : undefined}
       stepLabel={stepLabel}
       style={{ flexShrink: 0 }}
@@ -664,21 +705,31 @@ function RequestPanel({ session, order, stepLabel }: { session: Session; order?:
         <CrmTabs
           variant="segmented"
           value={req.kind ?? ""}
-          onChange={(id) => !locked && updateRequest({ kind: id as "refund" | "exchange" })}
-          tabs={[
-            { id: "refund", label: "환불", disabled: locked && req.kind !== "refund" },
-            { id: "exchange", label: "교환", disabled: locked && req.kind !== "exchange" },
-          ]}
+          onChange={(id) => !locked && updateRequest({ kind: id as RequestKind })}
+          tabs={kinds.map((k) => ({ id: k.id, label: k.label, disabled: locked && req.kind !== k.id }))}
         />
       }
     >
       {!flow ? (
         <div className="text-[13px] text-gray-600">
-          고객이 환불을 원하는지 다른 옵션으로 교환을 원하는지 확인한 뒤 오른쪽에서 선택하세요. 선택에 따라 처리 단계·필수 안내·처리 버튼이
-          바뀝니다.
+          {isPayment
+            ? "고객이 결제를 취소하려는지 결제 수단만 바꾸려는지 확인한 뒤 오른쪽에서 선택하세요."
+            : "고객이 환불을 원하는지 다른 옵션으로 교환을 원하는지 확인한 뒤 오른쪽에서 선택하세요."}{" "}
+          선택에 따라 처리 단계·필수 안내·처리 버튼이 바뀝니다.
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
+          {flow === "method_change" && order && (
+            <CrmSelect
+              size="sm"
+              label="변경할 결제 수단"
+              placeholder="미확인"
+              disabled={locked}
+              value={req.newPayMethod ?? ""}
+              options={payChangeOptions(customer, order)}
+              onChange={(e) => updateRequest({ newPayMethod: e.target.value || undefined })}
+            />
+          )}
           {showReturnInputs && (
             <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
               <CrmSelect
@@ -854,6 +905,12 @@ function RequestProgress({ session, flow }: { session: Session; flow: RequestFlo
               : { id: "r3", label: "환불 요청", hint: "하단 '환불 요청'으로 접수", status: "current" as const, statusLabel: "요청 전" },
             { id: "r4", label: "환불 완료", hint: "검수 후 결제 수단으로 환불", status: "todo" as const, statusLabel: "미완료" },
           ]
+        : flow === "method_change"
+          ? [
+              { id: "m1", label: "결제 수단 변경 접수", ...received(find("payment_change")) },
+              { id: "m2", label: "기존 결제 승인 취소", hint: "카드사 반영 3~5영업일", status: "todo" as const, statusLabel: "미완료" },
+              { id: "m3", label: "고객 재결제", hint: "결제 링크 24시간 유효 · 재결제 전 출고 보류", status: "todo" as const, statusLabel: "미완료" },
+            ]
         : [
             { id: "e1", label: "교환 접수", ...received(find("exchange")) },
             { id: "e2", label: "회수 · 검수", hint: "회수 1~3일 · 검수 1~2영업일", status: "todo" as const, statusLabel: "예정" },
@@ -867,20 +924,15 @@ function RequestProgress({ session, flow }: { session: Session; flow: RequestFlo
   );
 }
 
+// 통화 중 음성 인식(녹음·업로드)은 데모에서 크레딧을 쓰지 않도록 제거했습니다. 사전 접수 원문과 이전 기록만 보여 줍니다.
 function ConversationCard({ session, hold, compact }: { session: Session; hold: boolean; compact?: boolean }) {
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const voice = useVoiceClassify({
-    onStart: () => setVoiceError(null),
-    onResult: (r) => addCallTranscript(r),
-    onError: (msg) => setVoiceError(msg),
-  });
   const intake = intakeResult(session);
   const scrollRef = useRef<HTMLDivElement>(null);
   const count = session.transcripts.length;
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [count, voice.status]);
+  }, [count]);
 
   const suggestion = session.suggestion?.status === "open" ? session.suggestion : undefined;
 
@@ -889,29 +941,32 @@ function ConversationCard({ session, hold, compact }: { session: Session; hold: 
       title="대화 기록"
       icon="Mic"
       badge={
-        voice.status === "recording" ? (
-          <CrmBadge tone="danger" dot>
-            녹음 중
-          </CrmBadge>
-        ) : hold ? (
+        hold ? (
           <CrmBadge tone="warning" dot>
             보류 중
           </CrmBadge>
         ) : undefined
       }
-      actions={<VoiceCaptureButtons voice={voice} size="xs" recordLabel="통화 음성 인식" />}
       // 중앙 컬럼이 스크롤되므로 최소 높이를 두고 남는 공간만 채웁니다.
       // 환불·교환 패널이 있을 때는 메모까지 덜 스크롤하도록 더 낮춥니다(대화 기록은 카드 안에서 스크롤).
       style={{ flex: `1 0 ${compact ? 150 : 200}px`, minHeight: compact ? 150 : 200 }}
       bodyStyle={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}
     >
       <div ref={scrollRef} className="crm-scroll flex min-h-0 flex-1 flex-col gap-3">
-        {intake ? (
-          <Bubble
-            who="intake"
-            time={session.intake.status === "done" ? fmtTime(session.intake.at) : undefined}
+        {intake && session.intake.status === "done" ? (
+          <IntakeTranscript
+            time={fmtTime(session.intake.at)}
             text={intake.transcript}
-            extra={intake.keyRequest && <CrmBadge tone="ai" icon="Cpu">AI 핵심 요청: {intake.keyRequest}</CrmBadge>}
+            recording={session.intake.recording}
+            extra={
+              <>
+                {intakeSourceLabel(session.intake.source) && <span>· {intakeSourceLabel(session.intake.source)}</span>}
+                {intake.keyRequest && <CrmBadge tone="ai" icon="Cpu">AI 핵심 요청: {intake.keyRequest}</CrmBadge>}
+                {session.intake.recording && session.intake.recording !== "customer" && (
+                  <span className="text-gray-500">녹음 속 처리 안내는 이번 상담의 처리 결과가 아닙니다</span>
+                )}
+              </>
+            }
           />
         ) : (
           <div className="text-center text-xs text-gray-400">
@@ -934,24 +989,12 @@ function ConversationCard({ session, hold, compact }: { session: Session; hold: 
             }
           />
         ))}
-        {voice.status === "uploading" && (
-          <div className="flex items-center gap-2 text-[13px] text-gray-500">
-            <Icon name="Loader" size={14} className="crm-spin" />
-            통화 음성을 인식하는 중입니다.
-          </div>
-        )}
-        {session.transcripts.length === 0 && voice.status === "idle" && (
+        {session.transcripts.length === 0 && (
           <div className="rounded-md border border-dashed border-gray-300 p-3 text-center text-xs text-gray-500">
-            실시간 통화 연동 전입니다. 고객 발화를 녹음하거나 파일로 올리면 텍스트로 변환하고, 문의 유형이 달라지면 AI가 변경을 제안합니다.
+            실시간 통화 연동 전이라 통화 내용은 여기에 표시되지 않습니다. 고객과 나눈 내용은 상담 메모에 기록하세요.
           </div>
         )}
       </div>
-      {voice.status === "recording" && <RecordingIndicator level={voice.inputLevel} />}
-      {voiceError && (
-        <CrmInlineAlert tone="danger" title="통화 음성 인식에 실패했습니다" onClose={() => setVoiceError(null)}>
-          {voiceError} 메모에 직접 기록하고 상담을 계속하세요.
-        </CrmInlineAlert>
-      )}
       {suggestion && (
         <CrmInlineAlert
           tone="ai"

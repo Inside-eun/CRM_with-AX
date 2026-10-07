@@ -36,6 +36,7 @@ import { TRANSFER_DEPTS, playbookFor } from "@/lib/crm/playbooks";
 import { readCrm } from "@/lib/crm/store";
 import type { CrmState, Session, SummaryFields } from "@/lib/crm/types";
 import { ConsultGuard } from "../ConsultGuard";
+import { DemoGuide } from "../DemoGuide";
 import { MiniLabel, PageHeader } from "../ui";
 
 const FIELDS: { id: keyof SummaryFields; label: string }[] = [
@@ -148,6 +149,7 @@ function WrapUp({ state, session }: { state: CrmState; session: Session }) {
           후처리 중
         </CrmBadge>
       </PageHeader>
+      <DemoGuide session={session} />
 
       <div className="grid grid-cols-[minmax(0,1fr)_380px] items-start gap-4">
         {!w.draft ? (

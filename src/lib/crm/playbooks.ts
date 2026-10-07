@@ -11,7 +11,7 @@ import {
   returnDaysLeft,
   returnDeadline,
 } from "./format";
-import { FLOW_LABEL, assessRequest, requestFlow, type RequestFlow } from "./returns";
+import { FLOW_LABEL, assessRequest, hasRequestFlow, requestFlow, type RequestFlow } from "./returns";
 import type { ActionId, Customer, HistoryRecord, Order, OrderStatus, Session } from "./types";
 
 export type Policy = { id: string; name: string; revisedAt: string; text: string };
@@ -45,7 +45,7 @@ export const POLICIES: Policy[] = [
     id: "p-payment",
     name: "결제 취소 기준 4.1조",
     revisedAt: "2026.05.02",
-    text: "출고 전 주문은 즉시 결제 취소할 수 있습니다. 출고 후 주문은 반품 절차로 진행합니다. 카드사 반영까지 영업일 기준 3~5일이 걸린다고 안내합니다.",
+    text: "출고 전 주문은 즉시 결제 취소할 수 있습니다. 출고 후 주문은 반품 절차로 진행합니다. 카드사 반영까지 영업일 기준 3~5일이 걸린다고 안내합니다. 결제 수단 변경은 출고 전 주문에 한해 기존 결제를 취소하고 새 결제 수단으로 재결제하는 방식으로 진행하며, 재결제 전까지 출고를 보류합니다.",
   },
   {
     id: "p-as",
@@ -130,6 +130,13 @@ const REQUEST_STEP: StepDef = {
   hint: "고객이 환불을 원하는지 교환을 원하는지 확인하세요.",
   target: "중앙 · 환불·교환 요청",
   doneWhen: { type: "request" },
+};
+
+const PAY_REQUEST_STEP: StepDef = {
+  ...REQUEST_STEP,
+  label: "결제 요청 구분",
+  hint: "결제 취소인지 결제 수단 변경인지 확인하세요.",
+  target: "중앙 · 결제 요청",
 };
 
 export const PLAYBOOKS: Record<CategoryId, Playbook> = {
@@ -314,6 +321,7 @@ export const PLAYBOOKS: Record<CategoryId, Playbook> = {
     steps: [
       VERIFY_STEP,
       { ...ORDER_STEP, label: "결제 건 확인" },
+      PAY_REQUEST_STEP,
       {
         id: "status",
         label: "결제 상태·출고 여부 확인",
@@ -616,6 +624,63 @@ export const REQUEST_PLAYBOOKS: Record<RequestFlow, Playbook> = {
     ],
     actions: ["exchange"],
   },
+  method_change: {
+    ...PLAYBOOKS.payment,
+    title: FLOW_LABEL.method_change,
+    summary:
+      "출고 전 주문만 결제 수단을 바꿀 수 있습니다. 기존 결제를 취소하고 새 결제 수단으로 재결제하도록 안내합니다. 접수 후 고객이 재결제해야 변경이 끝납니다.",
+    steps: [
+      VERIFY_STEP,
+      { ...ORDER_STEP, label: "결제 건 확인" },
+      PAY_REQUEST_STEP,
+      {
+        id: "eligible",
+        label: "변경 조건 확인",
+        hint: "출고 전 여부, 새 결제 수단, 중복 접수를 확인하세요.",
+        target: "중앙 · 판단 근거",
+        doneWhen: { type: "eligible" },
+      },
+      {
+        id: "rule",
+        label: "기존 결제 취소·재결제 안내",
+        hint: "결제 수단만 바꾸는 것이 아니라 기존 결제 취소 후 재결제하는 방식임을 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "pay_change_rule" },
+      },
+      {
+        id: "change",
+        label: "결제 수단 변경 접수",
+        hint: "고객 동의를 받은 뒤 확정하세요. 고객이 재결제해야 변경이 끝납니다.",
+        target: "하단 · 결제 수단 변경",
+        doneWhen: { type: "action", ids: ["payment_change"] },
+      },
+      {
+        id: "link",
+        label: "재결제 방법 안내",
+        hint: "재결제 링크 유효 시간과 출고 보류를 안내하세요.",
+        target: "중앙 · 필수 안내 체크",
+        doneWhen: { type: "notice", id: "pay_change_link" },
+      },
+    ],
+    notices: [
+      {
+        id: "pay_change_rule",
+        label: "기존 결제 취소·재결제",
+        script:
+          "결제 수단 변경은 기존 결제를 취소하고 새 결제 수단으로 다시 결제하는 방식입니다. 기존 결제 취소는 카드사 반영까지 영업일 기준 3~5일이 걸릴 수 있습니다.",
+        policyId: "p-payment",
+        requiredFor: ["payment_change"],
+      },
+      {
+        id: "pay_change_link",
+        label: "재결제 방법",
+        script: "재결제 링크를 문자로 보내드리며, 24시간 안에 결제를 마치시면 주문이 그대로 진행됩니다. 재결제 전까지 출고는 잠시 보류됩니다.",
+        policyId: "p-payment",
+      },
+    ],
+    actions: ["payment_change"],
+    policies: ["p-payment", "p-refund"],
+  },
 };
 
 /** 접수하지 않고 끝내는 분기의 안내. 문구는 판단 결과에 맞춰 playbookFor에서 바꿉니다. */
@@ -644,7 +709,7 @@ const HANDOFF_ACTIONS: ActionId[] = ["transfer", "callback"];
  * denied = 처리 불가 판단, handoff = 추가 확인이 필요한 채로 이관·콜백함. 이미 접수했으면 undefined.
  */
 export function requestClosure(session: Session, order?: Order): "denied" | "handoff" | undefined {
-  if (session.category !== "refund_exchange") return undefined;
+  if (!hasRequestFlow(session.category)) return undefined;
   const a = assessRequest(session, order);
   if (!a.flow || a.submitted) return undefined;
   if (a.verdict === "no") return "denied";
@@ -652,12 +717,21 @@ export function requestClosure(session: Session, order?: Order): "denied" | "han
   return undefined;
 }
 
-/** 상담에 적용할 매뉴얼. 환불/교환은 요청 구분과 주문 상태에 따라 세부 흐름을 고릅니다. */
+/** 상담에 적용할 매뉴얼. 환불/교환·결제는 요청 구분과 주문 상태에 따라 세부 흐름을 고릅니다. */
 export function playbookFor(session: Session, order?: Order): Playbook {
-  if (session.category === "refund_exchange") {
+  if (hasRequestFlow(session.category)) {
     const flow = requestFlow(session, order);
     if (flow) {
-      const base = REQUEST_PLAYBOOKS[flow];
+      const flowBase = REQUEST_PLAYBOOKS[flow];
+      // 결제 상담에서 고른 결제 취소는 같은 흐름을 쓰되 요청 구분 단계 이름만 결제 기준으로 바꿉니다.
+      const base =
+        session.category === "payment" && flow === "cancel"
+          ? {
+              ...flowBase,
+              category: "payment" as const,
+              steps: flowBase.steps.map((st) => (st.id === "request" ? PAY_REQUEST_STEP : st)),
+            }
+          : flowBase;
       const closure = requestClosure(session, order);
       if (!closure) return base;
       // 접수할 수 없는 분기에서는 접수·비용 안내 단계 대신 종료 조건(불가 사유·대안·이관)을 둡니다.
@@ -804,6 +878,25 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
     description: "회수 검수 완료 시 자동 환불되도록 요청합니다.",
     followup: "환불 승인 후 고객 안내 문자 확인",
   },
+  payment_change: {
+    id: "payment_change",
+    label: "결제 수단 변경",
+    icon: "CreditCard",
+    consent: true,
+    receiptPrefix: "PM",
+    orderStatus: "결제 수단 변경 요청",
+    fields: [
+      {
+        id: "method",
+        label: "새 결제 수단",
+        type: "select",
+        options: ["새 카드 (결제 링크 발송)", "간편결제 (결제 링크 발송)"],
+        defaultValue: "새 카드 (결제 링크 발송)",
+      },
+    ],
+    description: "출고 전 주문의 기존 결제를 취소하고 새 결제 수단으로 재결제를 요청합니다.",
+    followup: "고객 재결제 완료 여부 확인",
+  },
   carrier_check: {
     id: "carrier_check",
     label: "택배사 확인 요청",
@@ -888,12 +981,12 @@ export function actionBlockedReason(actionId: ActionId, session: Session, order?
   // 담당자 이관·콜백은 고객 정보를 바꾸지 않아 본인 확인 전에도 쓸 수 있습니다.
   if (!session.verified && actionId !== "transfer" && actionId !== "callback") return "본인 확인 후 사용할 수 있습니다.";
   const done = (id: ActionId) => session.actions.some((a) => a.actionId === id);
-  const needsOrder: ActionId[] = ["tracking", "return_pickup", "exchange", "refund", "reship", "payment_cancel", "as"];
+  const needsOrder: ActionId[] = ["tracking", "return_pickup", "exchange", "refund", "reship", "payment_cancel", "payment_change", "as"];
   if (needsOrder.includes(actionId) && !order) return "관련 주문을 먼저 선택하세요.";
-  // 환불/교환 상담은 요청 구분과 처리 조건 판단이 끝나야 접수할 수 있습니다.
-  const submitActions: ActionId[] = ["return_pickup", "exchange", "payment_cancel"];
-  if (session.category === "refund_exchange" && [...submitActions, "refund"].includes(actionId)) {
-    if (!session.request?.kind) return "환불·교환 요청 구분을 먼저 선택하세요.";
+  // 환불/교환·결제 상담은 요청 구분과 처리 조건 판단이 끝나야 접수할 수 있습니다.
+  const submitActions: ActionId[] = ["return_pickup", "exchange", "payment_cancel", "payment_change"];
+  if (hasRequestFlow(session.category) && [...submitActions, "refund"].includes(actionId)) {
+    if (!session.request?.kind) return session.category === "payment" ? "결제 요청 구분을 먼저 선택하세요." : "환불·교환 요청 구분을 먼저 선택하세요.";
     if (submitActions.includes(actionId) && !done(actionId)) {
       const a = assessRequest(session, order);
       if (a.verdict === "no") return `접수 불가 조건이 있습니다: ${a.title}`;
@@ -920,6 +1013,9 @@ export function actionBlockedReason(actionId: ActionId, session: Session, order?
     case "payment_cancel":
       if (done("payment_cancel")) return "이미 결제 취소가 접수되었습니다.";
       return order?.status === "결제 완료" ? undefined : "출고 후 주문은 반품 절차로 진행하세요.";
+    case "payment_change":
+      if (done("payment_change")) return "이미 결제 수단 변경이 접수되었습니다.";
+      return order?.status === "결제 완료" ? undefined : "출고 후 주문은 결제 수단을 바꿀 수 없습니다.";
     default:
       return undefined;
   }

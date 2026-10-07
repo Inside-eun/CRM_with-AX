@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CrmAILabel,
   CrmBadge,
@@ -26,23 +26,33 @@ import {
   connectCall,
   customerOrders,
   intakeResult,
+  selectDemoScenario,
   selectOrder,
   setIntake,
 } from "@/lib/crm/operations";
+import {
+  DEMO_SCENARIOS,
+  NUMBER_MARK,
+  checkAudioAvailable,
+  demoScenario,
+  savedAnalysis,
+  scenarioOrder,
+} from "@/lib/crm/demo-scenarios";
 import { ACTIONS, PLAYBOOKS, briefingChecks, suggestOrder } from "@/lib/crm/playbooks";
-import type { CrmState, Customer, Order, Session } from "@/lib/crm/types";
-import { useVoiceClassify, type ClassifyResult } from "@/lib/useVoiceClassify";
+import type { CrmState, Customer, DemoScenarioId, Order, Session } from "@/lib/crm/types";
+import type { ClassifyResult } from "@/lib/useVoiceClassify";
 import { ConsultGuard } from "../ConsultGuard";
-import { RecordingIndicator, VoiceCaptureButtons } from "../VoiceCapture";
+import { DemoGuide } from "../DemoGuide";
 import {
   AICategoryBadge,
   APP_STARTED_AT,
-  Bubble,
   ConfirmedCategoryBadge,
   GradeBadge,
+  IntakeTranscript,
   MiniLabel,
   PageHeader,
   STAGE_ROUTES,
+  intakeSourceLabel,
   useNow,
 } from "../ui";
 
@@ -63,12 +73,19 @@ function Briefing({ state, session }: { state: CrmState; session: Session }) {
   const past = state.history.filter((h) => h.customerId === customer.id);
   const wait = queueItem ? fmtDuration(queueItem.waitSeconds + (now - APP_STARTED_AT) / 1000) : undefined;
 
-  // 자동 음성 접수(AI 음성봇)는 아직 연동 전이라, 녹음·업로드는 데모 입력 영역에서만 합니다.
-  const [demoOpen, setDemoOpen] = useState(false);
-  const voice = useVoiceClassify({
-    onResult: (result) => setIntake({ status: "done", result, at: new Date().toISOString() }),
-    onError: (error) => setIntake({ status: "failed", error, at: new Date().toISOString() }),
-  });
+  // 자동 음성 접수(AI 음성봇)는 아직 연동 전이라 데모 음성으로 접수 과정을 체험합니다.
+  // AI 분석은 방문자가 'AI 분석 시작'을 누를 때만, 미리 실행해 저장한 결과를 불러옵니다(크레딧 절약).
+  const [testOpen, setTestOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const analyze = (id: DemoScenarioId) => {
+    if (loading) return;
+    setLoading(true);
+    void loadScenarioAnalysis(id).then((ok) => {
+      setLoading(false);
+      // 결과를 불러오면 테스트 영역을 접어 원문·AI 분류가 바로 보이게 합니다.
+      if (ok) setTestOpen(false);
+    });
+  };
 
   const connect = () => {
     if (!session.orderNo && order) selectOrder(order.no);
@@ -113,17 +130,24 @@ function Briefing({ state, session }: { state: CrmState; session: Session }) {
         )}
       </PageHeader>
 
-      {!session.category && (
-        <CrmInlineAlert tone="info" title="문의 유형을 확정하면 고객을 연결할 수 있습니다">
-          접수 내용과 AI 분류를 확인하고 유형을 확정하세요. AI 분류 결과가 없거나 실패해도 문의 유형을 직접 선택해 상담을 진행할 수 있습니다.
-        </CrmInlineAlert>
-      )}
+      <DemoGuide session={session} />
 
       <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_320px] items-start gap-4">
         <div className="flex min-w-0 flex-col gap-4">
-          <IntakeSummaryCard session={session} voice={voice} onOpenDemo={() => setDemoOpen(true)} />
+          <IntakeSummaryCard
+            state={state}
+            session={session}
+            loading={loading}
+            onAnalyze={analyze}
+            testOpen={testOpen}
+            onToggleTest={() => setTestOpen((v) => !v)}
+          />
           <ClassificationCard key={session.intake.status === "none" ? "none" : session.intake.at} session={session} intake={intake} />
-          <DemoVoiceInput session={session} voice={voice} open={demoOpen} onToggle={() => setDemoOpen((v) => !v)} />
+          {session.intake.status === "none" && (
+            <CrmButton variant="link" size="sm" onClick={() => setIntake({ status: "skipped", at: new Date().toISOString() })}>
+              음성 접수 없이 진행
+            </CrmButton>
+          )}
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
@@ -195,120 +219,227 @@ function Briefing({ state, session }: { state: CrmState; session: Session }) {
   );
 }
 
-type Voice = ReturnType<typeof useVoiceClassify>;
+/** 저장해 둔 데모 음성 분석 결과를 불러옵니다. 실제 API는 호출하지 않습니다. */
+async function loadScenarioAnalysis(id: DemoScenarioId): Promise<boolean> {
+  const saved = savedAnalysis(id);
+  // 결과를 바로 넣으면 단계 전환을 알아보기 어려워 짧게 불러오는 상태를 보여 줍니다.
+  await new Promise((r) => setTimeout(r, 700));
+  if (!saved) {
+    setIntake({
+      status: "failed",
+      error: "이 음성의 저장된 분석 결과가 없습니다.",
+      at: new Date().toISOString(),
+      source: { kind: "scenario", scenarioId: id },
+    });
+    return false;
+  }
+  setIntake({
+    status: "done",
+    result: saved.result,
+    at: new Date().toISOString(),
+    source: { kind: "scenario", scenarioId: id },
+    recording: saved.recording,
+    analyzedAt: saved.analyzedAt,
+  });
+  return true;
+}
 
-/** 이미 접수된 고객 발화. 실제 업무에서는 AI 음성봇이 접수한 내용이 여기에 먼저 보입니다. */
-function IntakeSummaryCard({ session, voice, onOpenDemo }: { session: Session; voice: Voice; onOpenDemo: () => void }) {
+/**
+ * 접수 음성. 실제 업무에서는 AI 음성봇이 접수한 내용이 여기에 먼저 보입니다.
+ * 고객 단독 음성은 '고객 사전 접수', 화자를 구분하지 못한 녹음은 '상담 녹음 원문'으로 구분합니다.
+ */
+function IntakeSummaryCard({
+  state,
+  session,
+  loading,
+  onAnalyze,
+  testOpen,
+  onToggleTest,
+}: {
+  state: CrmState;
+  session: Session;
+  loading: boolean;
+  onAnalyze: (id: DemoScenarioId) => void;
+  testOpen: boolean;
+  onToggleTest: () => void;
+}) {
   const intake = session.intake;
-  const processing = voice.status === "recording" || voice.status === "uploading";
+  const recording = intake.status === "done" ? (intake.recording ?? "customer") : undefined;
+  const sourceLabel = intake.status === "done" || intake.status === "failed" ? intakeSourceLabel(intake.source) : undefined;
+  const failedScenario = intake.status === "failed" && intake.source?.kind === "scenario" ? intake.source.scenarioId : undefined;
   return (
     <CrmCard
-      title="접수된 고객 발화"
+      title={recording === "call" ? "상담 녹음 원문" : recording === "unknown" ? "업로드 음성 원문" : "접수된 고객 발화"}
       icon="MessageSquare"
+      // 자동 음성 접수 연동 전이라 체험용 입력의 출처(데모 음성 ① 등)를 부제에 함께 적습니다.
       subtitle={
         intake.status === "done"
-          ? `접수 ${fmtTime(intake.at)} · 음성 인식(STT) 원문을 그대로 보여 줍니다`
-          : "고객이 상담 연결 전에 남긴 음성 메시지"
+          ? `${recording === "customer" ? "고객 사전 접수" : "화자 미구분 녹음"} · ${sourceLabel ? `${sourceLabel} · ` : ""}접수 ${fmtTime(intake.at)}`
+          : sourceLabel ?? "고객이 상담 연결 전에 남긴 음성 메시지"
       }
-      badge={
-        intake.status === "done" ? (
-          <CrmBadge tone="neutral" square title="자동 음성 접수 연동 전이라 데모 입력으로 접수한 내용입니다">
-            데모 입력
-          </CrmBadge>
-        ) : undefined
+      actions={
+        <CrmButton size="xs" variant={testOpen ? "tertiary" : "ai"} icon={testOpen ? "ChevronUp" : "Mic"} onClick={onToggleTest}>
+          {testOpen ? "테스트 접기" : "고객 음성 분류 테스트하기"}
+        </CrmButton>
       }
     >
-      {processing ? (
-        <div className="flex flex-col gap-3" aria-live="polite">
-          <div className="flex items-center gap-2 text-[13px] text-gray-600">
-            <Icon name="Loader" size={16} className="crm-spin" />
-            {voice.status === "recording"
-              ? "데모 음성 입력에서 녹음 중입니다."
-              : "음성을 텍스트로 변환하고 문의 유형을 분류하는 중입니다."}
+      <div className="flex flex-col gap-3">
+        {testOpen && <ScenarioPicker state={state} session={session} loading={loading} onAnalyze={onAnalyze} />}
+        {loading ? (
+          <div className="flex flex-col gap-3" aria-live="polite">
+            <div className="flex items-center gap-2 text-[13px] text-gray-600">
+              <Icon name="Loader" size={16} className="crm-spin" />
+              저장된 AI 분석 결과(음성 인식·문의 분류)를 불러오는 중입니다.
+            </div>
+            <CrmSkeleton lines={3} />
           </div>
-          {voice.status === "uploading" && <CrmSkeleton lines={3} />}
-        </div>
-      ) : intake.status === "done" ? (
-        <Bubble who="intake" time={fmtTime(intake.at)} text={intake.result.transcript} />
-      ) : intake.status === "failed" ? (
-        <CrmInlineAlert tone="danger" title="음성 인식에 실패했습니다">
-          {intake.error} 아래에서 문의 유형을 직접 선택해 상담을 진행하세요.
-        </CrmInlineAlert>
-      ) : intake.status === "skipped" ? (
-        <CrmInlineAlert tone="neutral" title="음성 접수 없이 진행합니다">
-          아래에서 문의 유형을 직접 선택하세요. 고객 연결 후 통화 중에 내용을 확인하면 됩니다.
-        </CrmInlineAlert>
-      ) : (
-        <div className="flex flex-col items-start gap-2">
-          <div className="text-[13px] leading-5 text-gray-600">
-            접수된 고객 발화가 없습니다. 자동 음성 접수(AI 음성봇)는 아직 연동되지 않아 접수 내용이 자동으로 들어오지 않습니다. 문의 유형을 직접
-            선택해 진행하거나, 데모 음성 입력으로 접수 과정을 시연할 수 있습니다.
+        ) : intake.status === "done" ? (
+          <div className="flex flex-col gap-1.5">
+            <IntakeTranscript text={intake.result.transcript} time={fmtTime(intake.at)} recording={recording} />
+            {intake.analyzedAt && (
+              <div className="text-[11px] text-gray-400">
+                이 음성은 {fmtDate(intake.analyzedAt)}에 AI로 분석해 저장한 결과를 보여 줍니다 (방문 시마다 다시 분석하지 않음).
+              </div>
+            )}
           </div>
-          <CrmButton variant="link" size="sm" icon="Mic" onClick={onOpenDemo}>
-            데모 음성 입력 열기
-          </CrmButton>
-        </div>
-      )}
+        ) : intake.status === "failed" ? (
+          <CrmInlineAlert
+            tone="danger"
+            title="AI 분석 결과를 불러오지 못했습니다"
+            actions={
+              failedScenario ? (
+                <CrmButton size="sm" icon="RefreshCw" disabled={loading} onClick={() => onAnalyze(failedScenario)}>
+                  다시 시도
+                </CrmButton>
+              ) : undefined
+            }
+          >
+            {intake.error} 다시 시도하거나, 아래에서 문의 유형을 직접 선택해 상담을 진행하세요.
+          </CrmInlineAlert>
+        ) : intake.status === "skipped" ? (
+          <CrmInlineAlert tone="neutral" title="음성 접수 없이 진행합니다">
+            아래에서 문의 유형을 직접 선택하세요. 고객 연결 후 통화 중에 내용을 확인하면 됩니다.
+          </CrmInlineAlert>
+        ) : (
+          !testOpen && (
+            <div className="text-[13px] leading-5 text-gray-600">
+              접수된 고객 발화가 없습니다. 자동 음성 접수(AI 음성봇)는 아직 연동되지 않았습니다. &lsquo;고객 음성 분류 테스트하기&rsquo;로
+              데모 음성을 분석하거나, 문의 유형을 직접 선택해 진행하세요.
+            </div>
+          )
+        )}
+      </div>
     </CrmCard>
   );
 }
 
-/** 데모용 음성 입력 (녹음·파일 업로드). 실제 업무 흐름과 구분해 접어 둡니다. */
-function DemoVoiceInput({
+/** 데모 음성 3개 중 하나를 골라 듣고 AI 분석(저장된 결과)을 시작합니다. */
+function ScenarioPicker({
+  state,
   session,
-  voice,
-  open,
-  onToggle,
+  loading,
+  onAnalyze,
 }: {
+  state: CrmState;
   session: Session;
-  voice: Voice;
-  open: boolean;
-  onToggle: () => void;
+  loading: boolean;
+  onAnalyze: (id: DemoScenarioId) => void;
 }) {
-  const intake = session.intake;
-  const busy = voice.status === "recording" || voice.status === "uploading";
-  const expanded = open || busy;
+  const selected = session.demoScenarioId;
+  const sc = selected ? demoScenario(selected) : undefined;
+  const [available, setAvailable] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let alive = true;
+    DEMO_SCENARIOS.forEach((d) =>
+      void checkAudioAvailable(d.audioSrc).then((ok) => alive && setAvailable((m) => ({ ...m, [d.id]: ok }))),
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const order = sc ? scenarioOrder(state, sc) : undefined;
+  const ready = sc ? available[sc.id] : undefined;
+  const hasResult = sc ? !!savedAnalysis(sc.id) : false;
+  const analyzed = session.intake.status === "done" && session.intake.source?.kind === "scenario";
+  const hasProgress = session.intake.status !== "none" || !!session.category;
+  // 음성 파일이 없거나 저장된 분석 결과가 없으면 준비 중으로 표시합니다.
+  const statusOf = (id: DemoScenarioId) =>
+    available[id] === false ? "음성 준비 중" : available[id] && !savedAnalysis(id) ? "분석 결과 준비 중" : undefined;
+
   return (
-    <section className="rounded-xl border border-dashed border-gray-300 bg-gray-50">
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-4 py-3 text-left"
-        aria-expanded={expanded}
-        onClick={busy ? undefined : onToggle}
-      >
-        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={16} style={{ color: "var(--gray-500)" }} />
-        <span className="text-[13px] font-semibold text-gray-700">데모 음성 입력</span>
-        <CrmBadge tone="neutral" square>
-          DEMO
-        </CrmBadge>
-        <span className="min-w-0 flex-1 truncate text-xs text-gray-500">자동 음성 접수 연동 전 시연용 · 녹음 또는 오디오 파일</span>
-        {voice.status === "recording" && (
-          <CrmBadge tone="danger" dot>
-            녹음 중
-          </CrmBadge>
-        )}
-      </button>
-      {expanded && (
-        <div className="flex flex-col items-start gap-3 border-t border-dashed border-gray-300 px-4 py-3">
-          <p className="m-0 text-xs leading-[18px] text-gray-600">
-            실제 업무에서는 AI 음성봇이 접수한 내용이 위에 자동으로 표시됩니다. 지금은 연동 전이라 고객 음성 메시지를 직접 녹음하거나 파일로
-            올려 텍스트 변환(Whisper)과 AI 분류를 시연합니다.
-          </p>
-          {voice.status === "recording" && <RecordingIndicator level={voice.inputLevel} />}
-          <VoiceCaptureButtons voice={voice} size="sm" recordLabel={intake.status === "done" ? "다시 녹음" : "녹음 시작"} />
-          {voice.audioUrl && voice.status === "idle" && (
-            <audio controls src={voice.audioUrl} className="h-9 w-full">
+    <div className="flex flex-col gap-2.5 rounded-lg border border-teal-200 bg-teal-25 p-3">
+      <div className="text-xs font-semibold text-gray-600">데모 음성 선택</div>
+      <div role="radiogroup" aria-label="데모 음성" className="flex flex-col gap-1">
+        {DEMO_SCENARIOS.map((d) => {
+          const on = d.id === selected;
+          const status = statusOf(d.id);
+          return (
+            <button
+              key={d.id}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              disabled={loading}
+              onClick={() => !on && selectDemoScenario(d.id)}
+              className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-[13px] ${
+                on ? "border-teal-600 bg-white font-semibold text-gray-900" : "border-transparent text-gray-700 hover:bg-white"
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              <span className="w-4 text-center text-teal-700">{NUMBER_MARK[d.no]}</span>
+              <span className="flex-1">{d.label}</span>
+              {status && (
+                <CrmBadge tone="neutral" square>
+                  {status}
+                </CrmBadge>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {hasProgress && !loading && (
+        <div className="text-xs text-gray-500">다른 음성을 고르면 지금의 분석 결과·유형 확정·주문 확인 상태가 초기화됩니다.</div>
+      )}
+      {sc && (
+        <div className="flex flex-col gap-2 border-t border-teal-200 pt-2.5">
+          <div className="text-[13px] leading-5 text-gray-700">{sc.situation}</div>
+          {order && (
+            <div className="text-xs text-gray-500">
+              연결 데이터: {state.customers[sc.customerId].name} 고객 · {order.item} ({order.option}) · {order.status} · 후보 주문
+            </div>
+          )}
+          {ready === undefined ? (
+            <div className="text-xs text-gray-500">음성 파일 확인 중…</div>
+          ) : ready ? (
+            <audio controls preload="none" src={sc.audioSrc} className="h-9 w-full">
               <track kind="captions" />
             </audio>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+              <Icon name="Clock" size={14} />
+              음성 준비 중입니다. 파일이 등록되면 재생과 AI 분석을 할 수 있습니다. 지금은 문의 유형을 직접 선택해 체험할 수 있습니다.
+            </div>
           )}
-          {intake.status === "none" && (
-            <CrmButton variant="link" size="sm" onClick={() => setIntake({ status: "skipped", at: new Date().toISOString() })}>
-              음성 접수 없이 진행
+          {ready && !hasResult && (
+            <div className="text-xs text-gray-500">이 음성의 AI 분석 결과를 준비하고 있습니다. 문의 유형을 직접 선택해 체험할 수 있습니다.</div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <CrmButton
+              size="sm"
+              variant="ai"
+              icon="Cpu"
+              loading={loading}
+              disabled={!ready || !hasResult || loading || analyzed}
+              onClick={() => onAnalyze(sc.id)}
+            >
+              {loading ? "분석 중…" : analyzed ? "분석 완료" : "AI 분석 시작"}
             </CrmButton>
-          )}
+            {ready && hasResult && !analyzed && (
+              <span className="text-xs text-gray-500">미리 분석해 저장한 결과를 불러옵니다.</span>
+            )}
+          </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -396,7 +527,8 @@ function OrderCard({
   const deadline = order ? returnDeadline(order) : undefined;
   const left = order ? returnDaysLeft(order) : undefined;
   return (
-    <CrmCard title="관련 주문" icon="Package" tone="info" stepLabel="문의 대상">
+    // 상담원이 통화 중 고객에게 확인하기 전까지는 후보 주문입니다(데모 음성의 연결 주문도 같음).
+    <CrmCard title="관련 주문" icon="Package" tone="info" stepLabel={session.orderConfirmed ? "문의 대상" : "후보 · 확인 전"}>
       {!order ? (
         <div className="text-[13px] text-gray-500">주문 내역이 없습니다.</div>
       ) : (

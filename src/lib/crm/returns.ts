@@ -1,4 +1,4 @@
-// 환불/교환 처리 조건 판단 (규칙 기반). 확인하지 않은 값은 추측하지 않고 "추가 확인 필요"로 둡니다.
+// 환불/교환·결제 요청 처리 조건 판단 (규칙 기반). 확인하지 않은 값은 추측하지 않고 "추가 확인 필요"로 둡니다.
 // 판단 결과는 상담사 안내용이며, 최종 접수는 상담사가 고객 동의를 받은 뒤 확정합니다.
 import {
   RETURN_SHIPPING_FEE,
@@ -6,8 +6,20 @@ import {
   calendarDaysBetween,
   fmtDate,
   fmtWon,
+  maskPay,
 } from "./format";
-import type { ActionId, Order, OrderStatus, PerformedAction, ReturnReason, ReturnRequest, Session } from "./types";
+import type { CategoryId } from "@/lib/categories";
+import type {
+  ActionId,
+  Customer,
+  Order,
+  OrderStatus,
+  PerformedAction,
+  RequestKind,
+  ReturnReason,
+  ReturnRequest,
+  Session,
+} from "./types";
 
 /** 불량·오배송 반품·교환 가능 기간(수령 후) */
 export const DEFECT_WINDOW_DAYS = 30;
@@ -22,13 +34,14 @@ export const VERDICT_LABEL: Record<Verdict, string> = { ok: "가능", no: "불�
 
 export type Basis = { id: string; label: string; verdict: Verdict; text: string };
 
-/** cancel = 출고 전 취소, return = 배송 후 반품, exchange = 교환 */
-export type RequestFlow = "cancel" | "return" | "exchange";
+/** cancel = 출고 전 결제 취소, return = 배송 후 반품, exchange = 교환, method_change = 결제 수단 변경 */
+export type RequestFlow = "cancel" | "return" | "exchange" | "method_change";
 
 export const FLOW_LABEL: Record<RequestFlow, string> = {
-  cancel: "환불 · 출고 전 취소",
+  cancel: "출고 전 결제 취소(환불)",
   return: "환불 · 배송 후 반품",
   exchange: "교환",
+  method_change: "결제 수단 변경",
 };
 
 /** 이 흐름에서 접수하는 처리 기능 */
@@ -36,7 +49,36 @@ export const FLOW_SUBMIT_ACTION: Record<RequestFlow, ActionId> = {
   cancel: "payment_cancel",
   return: "return_pickup",
   exchange: "exchange",
+  method_change: "payment_change",
 };
+
+/** 요청 구분을 고르는 문의 유형과 그 선택지 */
+export const REQUEST_KINDS: Partial<Record<CategoryId, { id: RequestKind; label: string }[]>> = {
+  refund_exchange: [
+    { id: "refund", label: "환불" },
+    { id: "exchange", label: "교환" },
+  ],
+  payment: [
+    { id: "cancel", label: "결제 취소" },
+    { id: "method_change", label: "결제 수단 변경" },
+  ],
+};
+
+export const hasRequestFlow = (category?: CategoryId) => !!category && !!REQUEST_KINDS[category];
+
+export const requestKindLabel = (kind: RequestKind) =>
+  Object.values(REQUEST_KINDS)
+    .flat()
+    .find((k) => k?.id === kind)?.label ?? kind;
+
+/** 결제 수단 변경 선택지. 등록된 다른 결제 수단(번호는 가림)과 결제 링크 방식 */
+export function payChangeOptions(customer: Customer, order: Order): string[] {
+  const registered = customer.payMethods
+    .map((m) => m.replace(/\s*\(기본\)$/, ""))
+    .filter((m) => !order.payMethod.startsWith(m))
+    .map((m) => `${maskPay(m)} (등록 결제 수단)`);
+  return [...registered, "새 카드 (결제 링크 발송)", "간편결제 (결제 링크 발송)"];
+}
 
 export type Assessment = {
   flow?: RequestFlow;
@@ -85,7 +127,7 @@ function checkAction(b: Basis, order: Order): string {
 
 export const HANDOFF_HINT = "바로 확인하기 어려우면 담당자 이관 또는 콜백 예약";
 
-const PENDING_STATUSES: OrderStatus[] = ["반품 접수", "교환 접수", "환불 요청", "결제 취소 요청"];
+const PENDING_STATUSES: OrderStatus[] = ["반품 접수", "교환 접수", "환불 요청", "결제 취소 요청", "결제 수단 변경 요청"];
 const SIMPLE_PAY = /페이/;
 
 export const isDefectReason = (r?: ReturnReason) => r === "상품 불량" || r === "오배송";
@@ -93,7 +135,12 @@ export const isDefectReason = (r?: ReturnReason) => r === "상품 불량" || r =
 export function requestFlow(session: Session, order?: Order): RequestFlow | undefined {
   const kind = session.request?.kind;
   if (!kind) return undefined;
+  if (session.category === "payment") {
+    return kind === "method_change" ? "method_change" : kind === "cancel" ? "cancel" : undefined;
+  }
+  if (session.category !== "refund_exchange") return undefined;
   if (kind === "exchange") return "exchange";
+  if (kind !== "refund") return undefined;
   if (session.actions.some((a) => a.actionId === "payment_cancel")) return "cancel";
   return order?.status === "결제 완료" ? "cancel" : "return";
 }
@@ -222,11 +269,14 @@ export function assessRequest(session: Session, order?: Order): Assessment {
   if (!flow) {
     return {
       verdict: "check",
-      title: "요청 구분 필요 · 환불인지 교환인지 확인하세요",
+      title: session.category === "payment" ? "요청 구분 필요 · 결제 취소인지 결제 수단 변경인지 확인하세요" : "요청 구분 필요 · 환불인지 교환인지 확인하세요",
       basis: [],
-      script: "환불을 원하시는지, 다른 옵션으로 교환을 원하시는지 여쭤봐도 될까요?",
+      script:
+        session.category === "payment"
+          ? "결제를 취소하시려는 건지, 결제 수단만 바꾸시려는 건지 여쭤봐도 될까요?"
+          : "환불을 원하시는지, 다른 옵션으로 교환을 원하시는지 여쭤봐도 될까요?",
       costs: [],
-      next: ["고객에게 환불·교환 중 원하는 요청 확인"],
+      next: [session.category === "payment" ? "고객에게 결제 취소·결제 수단 변경 중 원하는 요청 확인" : "고객에게 환불·교환 중 원하는 요청 확인"],
     };
   }
   if (!order) {
@@ -279,6 +329,61 @@ export function assessRequest(session: Session, order?: Order): Assessment {
         { label: "취소 금액", value: `${fmtWon(order.price)} (전액)`, highlight: true },
         { label: "비용", value: "없음 (출고 전)" },
         { label: "예상 일정", value: `즉시 승인 취소 · ${refundSchedule(order)}` },
+      ],
+    };
+  }
+
+  if (flow === "method_change") {
+    const req2 = session.request ?? {};
+    const shipped = !submitted && order.status !== "결제 완료";
+    const bases: Basis[] = [
+      shipped
+        ? { id: "ship", label: "출고 여부", verdict: "no", text: `${order.status} · 출고 후에는 결제 수단 변경 불가` }
+        : { id: "ship", label: "출고 여부", verdict: "ok", text: "출고 전 · 기존 결제 취소 후 재결제 가능" },
+      req2.newPayMethod
+        ? { id: "method", label: "새 결제 수단", verdict: "ok", text: req2.newPayMethod }
+        : { id: "method", label: "새 결제 수단", verdict: "check", text: "고객이 원하는 결제 수단 확인 필요" },
+      dup,
+    ];
+    const verdict = aggregate(bases);
+    const why = bases.find((b) => b.verdict === "no");
+    return {
+      flow,
+      verdict,
+      submitted,
+      basis: bases,
+      title:
+        verdict === "ok"
+          ? "결제 수단 변경 가능"
+          : verdict === "no"
+            ? `결제 수단 변경 불가 · ${why!.label}`
+            : "추가 확인 필요 · 새 결제 수단",
+      script:
+        verdict === "ok"
+          ? `아직 출고 전이라 결제 수단을 바꿔 드릴 수 있습니다. 기존 ${maskPay(order.payMethod)} 결제 ${fmtWon(order.price)}은 승인 취소되고, ${req2.newPayMethod}로 다시 결제하시면 주문이 그대로 진행됩니다.`
+          : verdict === "no"
+            ? why!.id === "ship"
+              ? "확인해 보니 이미 출고되어 결제 수단을 바꿔 드리기 어렵습니다."
+              : "이미 접수된 건이 있어 새로 결제 수단 변경을 접수하기 어렵습니다."
+            : "어떤 결제 수단으로 바꾸시길 원하시는지 여쭤봐도 될까요?",
+      alternative:
+        verdict !== "no"
+          ? undefined
+          : why!.id === "ship"
+            ? "상품을 받으신 뒤 반품하고 원하시는 결제 수단으로 다시 주문하실 수 있습니다."
+            : "이미 접수된 건의 진행 상황을 확인해 안내해 드리겠습니다.",
+      next:
+        verdict === "ok"
+          ? ["기존 결제 취소·재결제 방법 안내", "고객 동의 후 결제 수단 변경 접수"]
+          : verdict === "no"
+            ? why!.id === "ship"
+              ? ["출고 후라 결제 수단 변경 불가 안내", "수령 후 반품·재주문 방법 안내"]
+              : ["기존 접수 건 진행 상황 확인·안내"]
+            : ["고객이 원하는 결제 수단 확인 (등록 수단 또는 결제 링크)"],
+      costs: [
+        { label: "기존 결제", value: `${fmtWon(order.price)} 승인 취소 · ${refundSchedule(order)}` },
+        { label: "재결제", value: `${fmtWon(order.price)} · ${req2.newPayMethod ?? "결제 수단 확인 후"}`, highlight: true },
+        { label: "추가 비용", value: "없음 · 재결제 전까지 출고 보류" },
       ],
     };
   }

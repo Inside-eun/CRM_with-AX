@@ -5,13 +5,16 @@ import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import type { ClassifyResult } from "@/lib/useVoiceClassify";
 import { RETURN_SHIPPING_FEE, fmtShortDate, fmtWon, isoDaysAgo, receiptNo, toDateInput, uid } from "./format";
 import { ACTIONS, ALL_PLAYBOOKS, suggestOrder } from "./playbooks";
-import { FLOW_LABEL, VERDICT_LABEL, assessRequest } from "./returns";
+import { demoScenario } from "./demo-scenarios";
+import { createSeed } from "./mock-data";
+import { FLOW_LABEL, VERDICT_LABEL, assessRequest, hasRequestFlow, requestKindLabel } from "./returns";
 import { readCrm, updateCrm } from "./store";
 import type {
   ActionId,
   AgentStatus,
   AlertStatus,
   CrmState,
+  DemoScenarioId,
   FollowUp,
   HistoryRecord,
   Intake,
@@ -60,35 +63,76 @@ export function setAgentStatus(status: AgentStatus) {
   updateCrm((state) => ({ ...state, agentStatus: status }));
 }
 
-/** 대기열의 첫 고객으로 상담을 시작합니다(사전 브리핑 단계). */
+function freshSession(queueId: string, customerId: string): Session {
+  return {
+    id: uid("S"),
+    queueId,
+    customerId,
+    stage: "briefing",
+    createdAt: new Date().toISOString(),
+    intake: { status: "none" },
+    orderConfirmed: false,
+    verified: false,
+    verifyFailures: 0,
+    heldMs: 0,
+    stepsDone: [],
+    notices: [],
+    actions: [],
+    memo: "",
+    transcripts: [],
+    alerts: {},
+    usedReplies: [],
+  };
+}
+
+/** 대기열의 첫 고객으로 상담을 시작합니다(사전 브리핑 단계). AI 분석은 자동으로 실행하지 않습니다. */
 export function startSession(): boolean {
   const state = readCrm();
   if (!state || state.session) return !!state?.session;
   const next = state.queue[0];
   if (!next) return false;
-  updateCrm((st) => ({
-    ...st,
-    session: {
-      id: uid("S"),
-      queueId: next.id,
-      customerId: next.customerId,
-      stage: "briefing",
-      createdAt: new Date().toISOString(),
-      intake: { status: "none" },
-      orderConfirmed: false,
-      verified: false,
-      verifyFailures: 0,
-      heldMs: 0,
-      stepsDone: [],
-      notices: [],
-      actions: [],
-      memo: "",
-      transcripts: [],
-      alerts: {},
-      usedReplies: [],
-    },
-  }));
+  updateCrm((st) => ({ ...st, session: freshSession(next.id, next.customerId) }));
   return true;
+}
+
+/**
+ * 사전 브리핑에서 데모 음성을 고릅니다. 이전 시나리오의 분석·확정·주문 확인·처리 상태를 모두 비우고,
+ * 시나리오 고객의 주문을 목 데이터 초기값으로 되돌립니다. 상담을 시작한 뒤에는 바꾸지 않습니다(restartDemo 사용).
+ */
+export function selectDemoScenario(id: DemoScenarioId) {
+  const sc = demoScenario(id);
+  const seed = createSeed();
+  updateCrm((state) => {
+    const s = state.session;
+    if (!s || s.stage !== "briefing") return state;
+    const seedOrders = seed.orders.filter((o) => o.customerId === sc.customerId);
+    const orders = [...state.orders.filter((o) => o.customerId !== sc.customerId), ...seedOrders];
+    // 이미 상담을 마쳐 대기열에서 빠진 고객이면 다시 넣어 저장 시 다른 고객이 빠지지 않게 합니다.
+    let queue = state.queue;
+    let queueItem = queue.find((q) => q.customerId === sc.customerId);
+    if (!queueItem) {
+      queueItem = seed.queue.find((q) => q.customerId === sc.customerId)!;
+      queue = [queueItem, ...queue];
+    }
+    return {
+      ...state,
+      orders,
+      queue,
+      session: {
+        ...freshSession(queueItem.id, sc.customerId),
+        demoScenarioId: id,
+        // 후보 주문. 상담원이 '고객에게 주문 확인함'을 눌러야 확정됩니다.
+        orderNo: seedOrders.find((o) => o.item === sc.orderItem)?.no,
+      },
+    };
+  });
+}
+
+/** 다시 테스트: 진행 중 상담과 주문·대기열을 처음 상태로 되돌리고 새 사전 브리핑을 엽니다. 저장한 상담 이력은 남깁니다. */
+export function restartDemo() {
+  const seed = createSeed();
+  updateCrm((state) => ({ ...state, session: undefined, orders: seed.orders, queue: seed.queue, agentStatus: "available" }));
+  startSession();
 }
 
 /** 음성 접수 결과를 기록합니다. 새로 접수하면 이전에 확정한 유형은 다시 확인해야 합니다. */
@@ -173,7 +217,7 @@ export function updateRequest(patch: Partial<ReturnRequest>) {
     const prev = s.request?.kind;
     // 요청 구분을 바꾸면 이전 판단을 이어 쓰지 않고 새 흐름의 정책으로 다시 판단합니다(메모에 기록).
     const switched = patch.kind && prev && patch.kind !== prev;
-    const label = (k: "refund" | "exchange") => (k === "refund" ? "환불" : "교환");
+    const label = requestKindLabel;
     return {
       ...s,
       request: { ...s.request, ...patch },
@@ -187,7 +231,7 @@ export function updateRequest(patch: Partial<ReturnRequest>) {
 /** 환불/교환 요청을 접수하지 않은 경우의 결과 요약. 접수했거나 해당 없으면 undefined */
 export function requestOutcome(state: CrmState): string | undefined {
   const s = state.session;
-  if (!s || s.category !== "refund_exchange") return undefined;
+  if (!s || !hasRequestFlow(s.category)) return undefined;
   const a = assessRequest(s, sessionOrder(state));
   if (!a.flow || a.submitted) return undefined;
   return `${FLOW_LABEL[a.flow]} ${VERDICT_LABEL[a.verdict]} 판단 — ${a.title}. 접수하지 않았습니다.`;
@@ -356,6 +400,7 @@ export function buildSummaryInput(state: CrmState) {
   return {
     category: categoryLabel(s.category ?? "other"),
     intakeTranscript: intake?.transcript ?? null,
+    intakeRecording: s.intake.status === "done" ? (s.intake.recording ?? "customer") : null,
     keyRequest: intake?.keyRequest ?? null,
     callTranscripts: s.transcripts.map((t) => t.text),
     memo: s.memo,
@@ -417,6 +462,7 @@ export function saveWrapup(): string | undefined {
       aiCategory: intake?.category,
       aiConfidence: intake?.confidence,
       intakeTranscript: intake?.transcript,
+      intakeRecording: s.intake.status === "done" ? (s.intake.recording ?? "customer") : undefined,
       keyRequest: intake?.keyRequest,
       orderNo: s.orderNo,
       verified: s.verified,
