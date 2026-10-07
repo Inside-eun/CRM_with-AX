@@ -63,6 +63,13 @@ function Briefing({ state, session }: { state: CrmState; session: Session }) {
   const past = state.history.filter((h) => h.customerId === customer.id);
   const wait = queueItem ? fmtDuration(queueItem.waitSeconds + (now - APP_STARTED_AT) / 1000) : undefined;
 
+  // 자동 음성 접수(AI 음성봇)는 아직 연동 전이라, 녹음·업로드는 데모 입력 영역에서만 합니다.
+  const [demoOpen, setDemoOpen] = useState(false);
+  const voice = useVoiceClassify({
+    onResult: (result) => setIntake({ status: "done", result, at: new Date().toISOString() }),
+    onError: (error) => setIntake({ status: "failed", error, at: new Date().toISOString() }),
+  });
+
   const connect = () => {
     if (!session.orderNo && order) selectOrder(order.no);
     connectCall();
@@ -108,14 +115,15 @@ function Briefing({ state, session }: { state: CrmState; session: Session }) {
 
       {!session.category && (
         <CrmInlineAlert tone="info" title="문의 유형을 확정하면 고객을 연결할 수 있습니다">
-          고객 음성을 접수해 AI 분류를 확인하거나, 음성 없이 문의 유형을 직접 선택하세요. AI 분류는 제안이며 상담사가 확정해야 적용됩니다.
+          접수 내용과 AI 분류를 확인하고 유형을 확정하세요. AI 분류 결과가 없거나 실패해도 문의 유형을 직접 선택해 상담을 진행할 수 있습니다.
         </CrmInlineAlert>
       )}
 
       <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_320px] items-start gap-4">
         <div className="flex min-w-0 flex-col gap-4">
-          <IntakeCard session={session} />
+          <IntakeSummaryCard session={session} voice={voice} onOpenDemo={() => setDemoOpen(true)} />
           <ClassificationCard key={session.intake.status === "none" ? "none" : session.intake.at} session={session} intake={intake} />
+          <DemoVoiceInput session={session} voice={voice} open={demoOpen} onToggle={() => setDemoOpen((v) => !v)} />
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
@@ -187,75 +195,120 @@ function Briefing({ state, session }: { state: CrmState; session: Session }) {
   );
 }
 
-function IntakeCard({ session }: { session: Session }) {
-  const voice = useVoiceClassify({
-    onResult: (result) => setIntake({ status: "done", result, at: new Date().toISOString() }),
-    onError: (error) => setIntake({ status: "failed", error, at: new Date().toISOString() }),
-  });
-  const intake = session.intake;
-  const busy = voice.status === "recording" || voice.status === "uploading";
+type Voice = ReturnType<typeof useVoiceClassify>;
 
+/** 이미 접수된 고객 발화. 실제 업무에서는 AI 음성봇이 접수한 내용이 여기에 먼저 보입니다. */
+function IntakeSummaryCard({ session, voice, onOpenDemo }: { session: Session; voice: Voice; onOpenDemo: () => void }) {
+  const intake = session.intake;
+  const processing = voice.status === "recording" || voice.status === "uploading";
   return (
     <CrmCard
-      title="고객 음성 접수 원문 (STT)"
-      icon="Mic"
+      title="접수된 고객 발화"
+      icon="MessageSquare"
       subtitle={
         intake.status === "done"
-          ? `접수 ${fmtTime(intake.at)} · 음성 인식 결과를 그대로 보여 줍니다`
-          : "고객 음성 메시지를 녹음하거나 파일로 올리면 텍스트로 변환합니다"
+          ? `접수 ${fmtTime(intake.at)} · 음성 인식(STT) 원문을 그대로 보여 줍니다`
+          : "고객이 상담 연결 전에 남긴 음성 메시지"
       }
-      actions={intake.status === "done" && !busy ? <VoiceCaptureButtons voice={voice} size="xs" recordLabel="다시 녹음" /> : undefined}
+      badge={
+        intake.status === "done" ? (
+          <CrmBadge tone="neutral" square title="자동 음성 접수 연동 전이라 데모 입력으로 접수한 내용입니다">
+            데모 입력
+          </CrmBadge>
+        ) : undefined
+      }
     >
-      {voice.status === "recording" ? (
-        <div className="flex flex-col items-start gap-3">
-          <RecordingIndicator level={voice.inputLevel} />
-          <VoiceCaptureButtons voice={voice} size="sm" />
-        </div>
-      ) : voice.status === "uploading" ? (
+      {processing ? (
         <div className="flex flex-col gap-3" aria-live="polite">
           <div className="flex items-center gap-2 text-[13px] text-gray-600">
             <Icon name="Loader" size={16} className="crm-spin" />
-            음성을 텍스트로 변환하고 문의 유형을 분류하는 중입니다.
+            {voice.status === "recording"
+              ? "데모 음성 입력에서 녹음 중입니다."
+              : "음성을 텍스트로 변환하고 문의 유형을 분류하는 중입니다."}
           </div>
-          <CrmSkeleton lines={3} />
+          {voice.status === "uploading" && <CrmSkeleton lines={3} />}
         </div>
       ) : intake.status === "done" ? (
-        <div className="flex flex-col gap-3">
-          <Bubble who="intake" time={fmtTime(intake.at)} text={intake.result.transcript} />
-          {voice.audioUrl && (
-            <audio controls src={voice.audioUrl} className="h-9 w-full">
-              <track kind="captions" />
-            </audio>
-          )}
-        </div>
+        <Bubble who="intake" time={fmtTime(intake.at)} text={intake.result.transcript} />
       ) : intake.status === "failed" ? (
-        <CrmInlineAlert
-          tone="danger"
-          title="음성 인식에 실패했습니다"
-          actions={<VoiceCaptureButtons voice={voice} size="sm" recordLabel="다시 녹음" />}
-        >
-          {intake.error} 다시 접수하거나, 아래에서 문의 유형을 직접 선택해 일반 상담으로 진행하세요.
+        <CrmInlineAlert tone="danger" title="음성 인식에 실패했습니다">
+          {intake.error} 아래에서 문의 유형을 직접 선택해 상담을 진행하세요.
         </CrmInlineAlert>
       ) : intake.status === "skipped" ? (
-        <CrmInlineAlert
-          tone="neutral"
-          title="음성 접수 없이 진행합니다"
-          actions={<VoiceCaptureButtons voice={voice} size="sm" recordLabel="음성 접수하기" />}
-        >
-          아래에서 문의 유형을 직접 선택하세요. 고객 연결 후 통화 음성을 인식할 수도 있습니다.
+        <CrmInlineAlert tone="neutral" title="음성 접수 없이 진행합니다">
+          아래에서 문의 유형을 직접 선택하세요. 고객 연결 후 통화 중에 내용을 확인하면 됩니다.
         </CrmInlineAlert>
       ) : (
-        <div className="flex flex-col items-start gap-3">
-          <p className="m-0 text-[13px] leading-5 text-gray-600">
-            AI 음성봇이 받은 고객 메시지를 접수합니다. 음성은 텍스트로 변환(Whisper)된 뒤 문의 유형과 핵심 요청이 AI로 정리됩니다.
-          </p>
-          <VoiceCaptureButtons voice={voice} />
-          <CrmButton variant="link" size="sm" onClick={() => setIntake({ status: "skipped", at: new Date().toISOString() })}>
-            음성 접수 없이 진행
+        <div className="flex flex-col items-start gap-2">
+          <div className="text-[13px] leading-5 text-gray-600">
+            접수된 고객 발화가 없습니다. 자동 음성 접수(AI 음성봇)는 아직 연동되지 않아 접수 내용이 자동으로 들어오지 않습니다. 문의 유형을 직접
+            선택해 진행하거나, 데모 음성 입력으로 접수 과정을 시연할 수 있습니다.
+          </div>
+          <CrmButton variant="link" size="sm" icon="Mic" onClick={onOpenDemo}>
+            데모 음성 입력 열기
           </CrmButton>
         </div>
       )}
     </CrmCard>
+  );
+}
+
+/** 데모용 음성 입력 (녹음·파일 업로드). 실제 업무 흐름과 구분해 접어 둡니다. */
+function DemoVoiceInput({
+  session,
+  voice,
+  open,
+  onToggle,
+}: {
+  session: Session;
+  voice: Voice;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const intake = session.intake;
+  const busy = voice.status === "recording" || voice.status === "uploading";
+  const expanded = open || busy;
+  return (
+    <section className="rounded-xl border border-dashed border-gray-300 bg-gray-50">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-4 py-3 text-left"
+        aria-expanded={expanded}
+        onClick={busy ? undefined : onToggle}
+      >
+        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={16} style={{ color: "var(--gray-500)" }} />
+        <span className="text-[13px] font-semibold text-gray-700">데모 음성 입력</span>
+        <CrmBadge tone="neutral" square>
+          DEMO
+        </CrmBadge>
+        <span className="min-w-0 flex-1 truncate text-xs text-gray-500">자동 음성 접수 연동 전 시연용 · 녹음 또는 오디오 파일</span>
+        {voice.status === "recording" && (
+          <CrmBadge tone="danger" dot>
+            녹음 중
+          </CrmBadge>
+        )}
+      </button>
+      {expanded && (
+        <div className="flex flex-col items-start gap-3 border-t border-dashed border-gray-300 px-4 py-3">
+          <p className="m-0 text-xs leading-[18px] text-gray-600">
+            실제 업무에서는 AI 음성봇이 접수한 내용이 위에 자동으로 표시됩니다. 지금은 연동 전이라 고객 음성 메시지를 직접 녹음하거나 파일로
+            올려 텍스트 변환(Whisper)과 AI 분류를 시연합니다.
+          </p>
+          {voice.status === "recording" && <RecordingIndicator level={voice.inputLevel} />}
+          <VoiceCaptureButtons voice={voice} size="sm" recordLabel={intake.status === "done" ? "다시 녹음" : "녹음 시작"} />
+          {voice.audioUrl && voice.status === "idle" && (
+            <audio controls src={voice.audioUrl} className="h-9 w-full">
+              <track kind="captions" />
+            </audio>
+          )}
+          {intake.status === "none" && (
+            <CrmButton variant="link" size="sm" onClick={() => setIntake({ status: "skipped", at: new Date().toISOString() })}>
+              음성 접수 없이 진행
+            </CrmButton>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -268,7 +321,7 @@ function ClassificationCard({ session, intake }: { session: Session; intake?: Cl
 
   return (
     <CrmCard
-      title={intake ? "AI 분류 · 핵심 요청" : "문의 유형"}
+      title={intake ? "AI 문의 분류 · 요약" : "문의 유형"}
       icon={intake ? "Cpu" : "Tag"}
       tone={intake ? "ai" : undefined}
       badge={intake ? <CrmAILabel text="AI 생성" /> : undefined}
@@ -297,8 +350,8 @@ function ClassificationCard({ session, intake }: { session: Session; intake?: Cl
       ) : (
         <div className="text-[13px] text-gray-600">
           {session.intake.status === "none"
-            ? "고객 음성을 접수하면 AI가 문의 유형과 핵심 요청을 제안합니다. 음성 없이 진행하려면 유형을 직접 선택하세요."
-            : "AI 분류 결과가 없습니다. 문의 유형을 직접 선택하면 일반 상담으로 진행할 수 있습니다."}
+            ? "AI 분류 결과가 없습니다. 접수 내용이 들어오면 AI가 문의 유형과 핵심 요청을 제안합니다. 지금은 문의 유형을 직접 선택해 진행하세요."
+            : "AI 분류 결과가 없습니다. 문의 유형을 직접 선택하면 해당 유형의 처리 단계로 상담을 진행할 수 있습니다."}
         </div>
       )}
 
